@@ -29,7 +29,7 @@ mkdir -p "${T}/bin"
 cat >"${T}/bin/vulkaninfo" <<'STUB'
 #!/usr/bin/env bash
 [[ "${vk_require_etc2:-}" == "true" && "${vk_require_astc:-}" == "true" ]] || exit 1
-printf 'Devices:\n========\nGPU0:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = true\n'
+printf 'Devices:\n========\nGPU0:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n' "${TEST_DOZEN_ETC2:-true}"
 printf 'Device Extensions: count = 2\n\tVK_KHR_swapchain : extension revision 70\n\tVK_KHR_external_memory_fd : extension revision 1\n'
 STUB
 chmod +x "${T}/bin/vulkaninfo"
@@ -46,8 +46,25 @@ host_is_wsl2() { true; }
 assert_equal "" "$(primary_vulkan_device_missing_venus_extensions)"
 echo "ok: under WSL2 nothing Venus needs is missing"
 
-# gpu_mode=auto still keeps gfxstream_guest_angle under WSL2, and says how to
-# run Venus.
-reason="$(host_suits_venus)" && fail "auto picked Venus under WSL2"
-[[ "${reason}" == *"--gpu_mode=venus"* ]] || fail "the reason does not name --gpu_mode=venus: ${reason}"
-echo "ok: under WSL2 auto keeps gfxstream_guest_angle"
+# gpu_mode=auto runs Venus under WSL2 where Dozen offers Vulkan 1.3, and keeps
+# gfxstream_guest_angle where it offers 1.2 (Kaby Lake's Iris Plus 650), with
+# the reason. The host is never the machine the test runs on.
+host_is_apple_silicon() { false; }
+gfxstream_passes_over_hardware_vulkan() { return 1; }
+vulkaninfo_summary() {
+  printf 'GPU0:\n  apiVersion = %s\n  deviceName = Microsoft Direct3D12 (Test GPU)\n  driverID = DRIVER_ID_MESA_DOZEN\n' \
+    "${TEST_DOZEN_VERSION}"
+}
+assert_equal "venus" "$(TEST_DOZEN_VERSION=1.3.363 default_gpu_mode_for_start 2>/dev/null)"
+echo "ok: under WSL2 auto runs Venus on Dozen with Vulkan 1.3"
+assert_equal "gfxstream_guest_angle" "$(TEST_DOZEN_VERSION=1.2.363 default_gpu_mode_for_start 2>/dev/null)"
+[[ "$(TEST_DOZEN_VERSION=1.2.363 default_gpu_mode_for_start 2>&1 >/dev/null)" \
+    == *"not venus: the GPU's Vulkan is 1.2.363, below 1.3"* ]] \
+  || fail "no reason logged for keeping gfxstream_guest_angle on Vulkan 1.2"
+echo "ok: under WSL2 auto keeps gfxstream_guest_angle on Dozen with Vulkan 1.2"
+
+# A Dozen without Ika's ETC2 decoding (the distribution's, or an older Ika's)
+# keeps gfxstream_guest_angle, which emulates ETC2 itself.
+assert_equal "gfxstream_guest_angle" \
+  "$(TEST_DOZEN_ETC2=false TEST_DOZEN_VERSION=1.3.363 default_gpu_mode_for_start 2>/dev/null)"
+echo "ok: under WSL2 auto keeps gfxstream_guest_angle on a Dozen without ETC2"

@@ -8,12 +8,12 @@ Android draws with the host's GPU. Its OpenGL ES and Vulkan calls are encoded in
 
 | Mode | What it does | Use it for |
 | --- | --- | --- |
-| `gfxstream_guest_angle` | The default where `venus` does not suit the host (see [How Ika chooses](#how-ika-chooses)). ANGLE in the guest turns OpenGL ES into Vulkan, which gfxstream runs on the host's Vulkan driver | Everything: games, Vulkan apps, the desktop |
+| `gfxstream_guest_angle` | The default where neither `venus` nor `honeykrisp` suits the host (see [How Ika chooses](#how-ika-chooses)). ANGLE in the guest turns OpenGL ES into Vulkan, which gfxstream runs on the host's Vulkan driver | Everything: games, Vulkan apps, the desktop |
 | `gfxstream` | gfxstream sends OpenGL ES to its own translator on the host's OpenGL driver; Vulkan is optional | Hosts whose only Vulkan driver is a software one, and titles that render wrongly through ANGLE |
 | `guest_swiftshader` | The guest renders on the CPU (ANGLE and SwiftShader) | Ruling out a host GPU problem; turns [low-CPU mode](CONFIGURATION.md#low-cpu-mode) on |
 | `guest_lavapipe` | The guest renders on the CPU with Mesa's lavapipe (Vulkan 1.4) and ANGLE | The same, with Vulkan 1.4 instead of SwiftShader's 1.3; turns low-CPU mode on |
-| `venus` | The default on a GPU with Vulkan 1.3 or newer and ETC2 textures, whose driver can share images with Android. Mesa's Venus Vulkan driver in the guest, over virglrenderer on the host's Vulkan driver, with ANGLE for OpenGL ES | Everything, with less of the host's CPU than gfxstream (see [Venus](#venus)) |
-| `honeykrisp` | Apple Silicon only, and never the default. Mesa's Apple Vulkan driver runs in the guest itself and drives the host's GPU through the asahi kernel driver's virtio-gpu native context, with ANGLE for OpenGL ES | Trying the native context; for now a little slower than `gfxstream_guest_angle` (see [Honeykrisp in the guest](#honeykrisp-in-the-guest)) |
+| `venus` | The default on a GPU with Vulkan 1.3 or newer and ETC2 textures, whose driver can share images with Android, WSL2's Dozen included. Mesa's Venus Vulkan driver in the guest, over virglrenderer on the host's Vulkan driver, with ANGLE for OpenGL ES | Everything, with less of the host's CPU than gfxstream (see [Venus](#venus)) |
+| `honeykrisp` | The default on Apple Silicon, with the arm64 ROM. Mesa's Apple Vulkan driver runs in the guest itself and drives the host's GPU through the asahi kernel driver's virtio-gpu native context, with ANGLE for OpenGL ES | Everything on Apple Silicon; 3DMark runs a little behind `gfxstream_guest_angle` (see [Honeykrisp in the guest](#honeykrisp-in-the-guest)) |
 
 The two gfxstream modes differ in where OpenGL ES is translated:
 
@@ -61,6 +61,11 @@ Vulkan devices:
   `gfxstream` mode that host renders OpenGL ES on its GPU instead; a 1080p
   video that dropped 62% of its frames with `gfxstream_guest_angle` dropped
   1%.
+- `honeykrisp` on Apple Silicon, when the GPU is under the asahi kernel
+  driver and the ROM ships Mesa's Apple Vulkan driver, as the arm64 ROM does
+  (see [Honeykrisp in the guest](#honeykrisp-in-the-guest)); otherwise
+  `gfxstream_guest_angle` there, never `venus`: on an M1 Pro games run faster
+  with `gfxstream_guest_angle` (see [Venus](#venus)).
 - `venus` when the first Vulkan device is a GPU with Vulkan 1.3 or newer and
   ETC2 compressed textures, as Venus's guest sees them. Android expects ETC2
   of a Vulkan device, and Chromium's GPU process quits without it; gfxstream
@@ -72,10 +77,11 @@ Vulkan devices:
   `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign`,
   through which Venus shares Android's buffers with the host: without them
   Android's Vulkan has no windows, and every app stops as it starts. RADV has
-  the second on Radeons older than Vega (an RX 570) from Mesa 26.3 on. Not on
-  WSL2, where `gfxstream_guest_angle` runs Steel Nomad Light faster (see
-  [Venus on WSL2](#venus-on-wsl2)), or on Apple Silicon, where games run
-  faster with `gfxstream_guest_angle` (see [Venus](#venus)).
+  the second on Radeons older than Vega (an RX 570) from Mesa 26.3 on. Under
+  WSL2 the GPU is Dozen's, which Ika's build makes emulate ETC2 and ASTC as
+  well, and whose images Venus shares as opaque fds instead (see
+  [Venus on WSL2](#venus-on-wsl2)); Dozen offers Vulkan 1.3 only on GPUs with
+  shader model 6.6 and wave operations.
 - `gfxstream_guest_angle` otherwise.
 
 The checks run in this order, on the GPU Ika uses ("GPU Hardware" in Startup
@@ -86,29 +92,29 @@ flowchart TD
     start["gpu_mode = auto<br/>Checks the GPU Ika uses"]
     q1["Only software Vulkan?<br/>llvmpipe, lavapipe, SwiftShader"]
     q2["Would gfxstream skip the GPU?<br/>Old Vulkan ranks below llvmpipe"]
-    q3["Running under WSL2?<br/>Any Windows host"]
-    q4["Apple Silicon?<br/>Asahi Linux"]
+    q3["Apple Silicon?<br/>Asahi Linux"]
+    q4["Honeykrisp can run?<br/>asahi kernel driver, arm64 ROM"]
     q5["GPU has Vulkan 1.3 or newer?<br/>From vulkaninfo"]
     q6["ETC2 textures, even emulated?<br/>Probed as Venus would see it"]
-    q7["Driver shares images with Android?<br/>dma-bufs, format modifiers, foreign queues"]
+    q7["Driver shares images with Android?<br/>dma-bufs, format modifiers, foreign queues;<br/>Dozen's opaque fds in WSL2"]
     r1("gfxstream, OpenGL ES only<br/>GPU pipeline is 100% software")
     r2("gfxstream, OpenGL ES only<br/>Haswell (2013) and older")
-    r3("gfxstream_guest_angle<br/>AMD 780M, RTX 4080, Intel UHD/Xe in WSL")
-    r4("gfxstream_guest_angle")
-    r5("gfxstream_guest_angle<br/>Discrete GPUs on Vulkan 1.2")
+    hk("honeykrisp<br/>Apple M1 and M2")
+    r4("gfxstream_guest_angle<br/>The x86_64 ROM")
+    r5("gfxstream_guest_angle<br/>Discrete GPUs on Vulkan 1.2, Iris Plus 650 in WSL")
     r6("gfxstream_guest_angle<br/>NVIDIA")
     r7("gfxstream_guest_angle<br/>Radeons older than Vega before Mesa 26.3")
-    venus("venus<br/>AMD, Intel Broadwell and newer")
+    venus("venus<br/>AMD, Intel Broadwell and newer,<br/>RTX 4080 and UHD 770 in WSL")
 
     start --> q1
     q1 -- yes --> r1
     q1 -- no --> q2
     q2 -- yes --> r2
     q2 -- no --> q3
-    q3 -- yes --> r3
-    q3 -- no --> q4
-    q4 -- yes --> r4
-    q4 -- no --> q5
+    q3 -- yes --> q4
+    q3 -- no --> q5
+    q4 -- yes --> hk
+    q4 -- no --> r4
     q5 -- no --> r5
     q5 -- yes --> q6
     q6 -- no --> r6
@@ -118,8 +124,8 @@ flowchart TD
 
     classDef gfx fill:#E1F5EE,stroke:#0F6E56,color:#085041
     classDef ven fill:#EEEDFE,stroke:#534AB7,color:#3C3489
-    class r1,r2,r3,r4,r5,r6,r7 gfx
-    class venus ven
+    class r1,r2,r4,r5,r6,r7 gfx
+    class venus,hk ven
 ```
 
 `--gpu_mode=` on the command line wins over all three. A mode named in
@@ -138,7 +144,7 @@ ika restart --gpu_mode=auto
 
 The start line says which path Android renders through, and
 `~/ika/ikastart.log` logs each choice Ika made, with the reason when `auto`
-does not pick `venus`.
+does not pick `venus` or `honeykrisp`.
 
 ## Vulkan in gfxstream mode
 
@@ -337,7 +343,7 @@ ika restart --gpu_mode=honeykrisp
 It needs the arm64 ROM, which ships the driver, and an Apple GPU under the
 asahi kernel driver. Elsewhere `--gpu_mode=honeykrisp` stops with the reason,
 and `gpu_mode = honeykrisp` in `ika.ini` starts `gfxstream_guest_angle`
-instead. `gpu_mode = auto` never picks it.
+instead. `gpu_mode = auto` picks it where both are there.
 
 On an M1 Pro Android draws its desktop and apps, Chromium plays VP9 video,
 the camera shows its picture, and Asphalt 8 races at its 30 fps. 3DMark runs a
@@ -391,8 +397,8 @@ gfxstream renders on that. `ika-base`, in its Debian, RPM and Arch packages,
 carries its own Dozen on x86_64, from [Ika's Mesa](#ikas-mesa), installed
 under `/usr/lib/cuttlefish-common/wsl/dozen`. It offers Vulkan 1.3 where the
 GPU's D3D12 driver has shader model 6.6 and wave operations, and 1.2 on older
-GPUs such as Kaby Lake's Iris Plus 650. Venus runs on it too when asked for;
-see [Venus on WSL2](#venus-on-wsl2).
+GPUs such as Kaby Lake's Iris Plus 650. `gpu_mode = auto` runs Venus on it
+where it offers Vulkan 1.3; see [Venus on WSL2](#venus-on-wsl2).
 
 ### What the host needs
 
@@ -492,9 +498,7 @@ write-back memory on integrated GPUs, where the window takes 14%.
 In the `gfxstream` mode, crosvm's own OpenGL, which runs Android's OpenGL ES,
 uses the same driver, set up the same way.
 
-`gpu_mode = auto` then picks `gfxstream_guest_angle`, as Venus needs the
-dma-bufs Dozen cannot export. The start log has a `WSL2:` line when Ika set
-this up.
+The start log has a `WSL2:` line when Ika set this up.
 
 On WSLg the console and app windows also load Ika's build of libdecor's GTK
 plugin, which draws their title bar and shadow
@@ -519,8 +523,8 @@ next frame, so its buttons did not highlight under the pointer.
 
 ### Venus on WSL2
 
-`--gpu_mode=venus` runs Venus on Dozen; `auto` keeps `gfxstream_guest_angle`.
-Dozen shares no memory the CPU sees with another process, as a dma-buf or as
+`gpu_mode = auto` runs Venus on Dozen where it offers Vulkan 1.3, and
+`gfxstream_guest_angle` on GPUs where it offers 1.2. Dozen shares no memory the CPU sees with another process, as a dma-buf or as
 an fd, so Venus runs differently from Linux:
 
 - Cuttlefish starts crosvm without a render server: virglrenderer runs
@@ -543,7 +547,7 @@ replays an app's Vulkan calls on one host thread, which spends most of its
 time in the D3D12 driver recording the draws, where gfxstream records on two.
 On an Intel UHD 770 Wild Life Extreme is 5% slower than with
 `gfxstream_guest_angle` (1,548 against 1,621). Kaby Lake's Iris Plus 650, with
-Vulkan 1.2, runs it. When Windows removes the GPU's D3D12 device, as on the
+Vulkan 1.2, runs it when asked for (`--gpu_mode=venus`), slowly. When Windows removes the GPU's D3D12 device, as on the
 UHD 770 in Steel Nomad Light in either mode, the app drawing then stops and
 Android carries on.
 
@@ -552,9 +556,9 @@ Android carries on.
 Geekbench 7.1 and 3DMark in Ika 261111, on hosts started once on Linux and
 once on Windows with WSL2, each with `gpu_mode = auto`. On Linux `auto` ran
 Venus on the Radeon and the Intel GPU and `gfxstream_guest_angle` on the
-NVIDIA one; on WSL2 it is `gfxstream_guest_angle` on Dozen everywhere. The
+NVIDIA one; on WSL2 it ran `gfxstream_guest_angle` on Dozen everywhere. The
 Intel 12th-gen laptop has the RTX 4080 and the UHD 770, measured one at a time.
-The Apple M1 Pro runs Linux only, on `gfxstream_guest_angle`.
+The Apple M1 Pro runs Linux only, and ran `gfxstream_guest_angle`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="src/docs/linux-vs-wsl-dark.svg">

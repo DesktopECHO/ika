@@ -78,3 +78,22 @@ assert_equal "gfxstream_guest_angle" "$(TEST_ASAHI=0 default_gpu_mode_for_start 
 CVD_GPU_DEFAULTS[gpu_mode]="${CVD_GPU_MODE_AUTO_BASE}"
 unset 'IKA_INI[gpu.gpu_mode]'
 echo "ok: honeykrisp in ika.ini stands only on an Apple GPU"
+
+# gpu_mode = auto picks honeykrisp on Apple Silicon where the GPU is under the
+# asahi kernel driver and the ROM has the driver, and gfxstream_guest_angle
+# there otherwise, never venus, with the reason.
+host_is_apple_silicon() { true; }
+assert_equal "honeykrisp" "$(TEST_ASAHI=1 default_gpu_mode_for_start 2>/dev/null)"
+assert_equal "gfxstream_guest_angle" "$(TEST_ASAHI=0 default_gpu_mode_for_start 2>/dev/null)"
+[[ "$(TEST_ASAHI=0 default_gpu_mode_for_start 2>&1 >/dev/null)" \
+    == *"not honeykrisp: the host has no Apple GPU under the asahi kernel driver"* ]] \
+  || fail "no reason logged for auto leaving honeykrisp out"
+printf 'config=tablet\nvulkan_venus_apex=supported\n' >"${android_info}"
+assert_equal "gfxstream_guest_angle" "$(TEST_ASAHI=1 default_gpu_mode_for_start 2>/dev/null)"
+printf 'vulkan_asahi_apex=supported\n' >"${android_info}"
+echo "ok: auto picks honeykrisp on Apple Silicon with the driver, gfxstream_guest_angle without"
+
+# --gpu_mode= on the command line still wins over auto's choice.
+assert_equal "gfxstream_guest_angle" \
+  "$(TEST_ASAHI=1 default_gpu_mode_for_start --gpu_mode=gfxstream_guest_angle 2>/dev/null)"
+echo "ok: --gpu_mode= wins over honeykrisp on Apple Silicon"

@@ -223,7 +223,7 @@ game_apps = com.example.game
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `gpu_mode` | `auto` | The GPU mode: `auto` (`venus` or `gfxstream_guest_angle`, by the host's GPU), `gfxstream_guest_angle`, `gfxstream`, `venus`, `honeykrisp` (Apple Silicon only), `guest_swiftshader` and others. `--gpu_mode=`, which wins on every host; `--gpu_mode=auto` gives `auto`'s choice for that start, whatever this says. Hosts with only software Vulkan drivers, or whose GPU gfxstream passes over for llvmpipe, use `gfxstream` whatever this says, `auto` included, and `venus` here starts `gfxstream_guest_angle` on a host whose driver cannot run Venus, as `honeykrisp` does on a host without an Apple GPU. See [Graphics](GRAPHICS.md#how-ika-chooses) |
+| `gpu_mode` | `auto` | The GPU mode: `auto` (`venus`, `honeykrisp` or `gfxstream_guest_angle`, by the host's GPU), `gfxstream_guest_angle`, `gfxstream`, `venus`, `honeykrisp` (Apple Silicon only), `guest_swiftshader` and others. `--gpu_mode=`, which wins on every host; `--gpu_mode=auto` gives `auto`'s choice for that start, whatever this says. Hosts with only software Vulkan drivers, or whose GPU gfxstream passes over for llvmpipe, use `gfxstream` whatever this says, `auto` included, and `venus` here starts `gfxstream_guest_angle` on a host whose driver cannot run Venus, as `honeykrisp` does on a host without an Apple GPU. See [Graphics](GRAPHICS.md#how-ika-chooses) |
 | `gfxstream_vulkan` | `auto` | Vulkan in the `gfxstream` mode. `--gfxstream_vulkan=`, `GFXSTREAM_VULKAN` |
 | `host_cached_memory` | `off` | Cached host memory for Vulkan uploads. `--host_cached_memory=`, `IKA_HOST_CACHED_MEMORY` |
 | `hw_video_decode` | `auto` | VA-API video decoding. `--hw_video_decode=`, `IKA_HW_VIDEO_DECODE` |

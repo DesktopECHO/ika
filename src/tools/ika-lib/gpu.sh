@@ -875,8 +875,10 @@ host_is_wsl2() {
 # with Vulkan 1.3 or newer and ETC2 textures as Venus's guest sees them, which
 # Android expects of a Vulkan device and Chromium requires (gfxstream emulates
 # ETC2, Venus does not), its driver has the extensions Venus shares Android's
-# buffers through, and this is not WSL2 or Apple Silicon. Prints why not when
-# it does not suit.
+# buffers through. Under WSL2 the GPU is Dozen's, which emulates ETC2 and ASTC
+# for Venus and shares Android's buffers as opaque fds (see GRAPHICS.md,
+# "Venus on WSL2"). Apple Silicon is decided before (default_gpu_mode_for_start).
+# Prints why not when it does not suit.
 host_suits_venus() {
   local primary_device
   local missing_extensions
@@ -884,18 +886,6 @@ host_suits_venus() {
   local major
   local minor
 
-  # Under WSL2 Venus runs when asked for, but gfxstream renders 3DMark Steel
-  # Nomad Light faster (see GRAPHICS.md, "Venus on WSL2").
-  if host_is_wsl2; then
-    printf '%s\n' "this is WSL2, where gfxstream_guest_angle stays the default; --gpu_mode=venus runs Venus"
-    return 1
-  fi
-  # On the M1 Pro, 3DMark Wild Life Extreme scored 27%, Steel Nomad Light 14%
-  # and Geekbench GPU 9% higher with gfxstream_guest_angle than with Venus.
-  if host_is_apple_silicon; then
-    printf '%s\n' "games run faster with gfxstream on the Apple GPU"
-    return 1
-  fi
   primary_device="$(primary_vulkan_device_summary || true)"
   if [[ -z "${primary_device}" ]]; then
     printf '%s\n' "no Vulkan device found"
@@ -904,10 +894,6 @@ host_suits_venus() {
   if grep -Eiq '(llvmpipe|lavapipe|swiftshader|software rasterizer|software device|PHYSICAL_DEVICE_TYPE_CPU)' \
       <<<"${primary_device}"; then
     printf '%s\n' "the first Vulkan device is a software one"
-    return 1
-  fi
-  if grep -q 'DRIVER_ID_MESA_DOZEN' <<<"${primary_device}"; then
-    printf '%s\n' "Dozen cannot export its memory as dma-bufs"
     return 1
   fi
   version="$(awk -F'=' '/apiVersion/ { split($2, v, " "); print v[1]; exit }' <<<"${primary_device}")"
@@ -979,6 +965,20 @@ default_gpu_mode_for_start() {
       return 0
     fi
     printf '%s\n' "${CVD_GPU_DEFAULTS[gpu_mode]}"
+    return 0
+  fi
+  # On Apple Silicon the guest runs Mesa's Apple Vulkan driver itself, over
+  # the GPU's native context, where the host and the ROM allow it; otherwise
+  # gfxstream_guest_angle, not Venus: on the M1 Pro, 3DMark Wild Life Extreme
+  # scored 27%, Steel Nomad Light 14% and Geekbench GPU 9% higher with it.
+  if host_is_apple_silicon; then
+    if honeykrisp_reason="$(honeykrisp_blocker)"; then
+      log "gpu_mode=auto keeps ${CVD_GPU_DEFAULTS[gpu_mode]}, not honeykrisp: ${honeykrisp_reason}"
+      printf '%s\n' "${CVD_GPU_DEFAULTS[gpu_mode]}"
+      return 0
+    fi
+    log "the host has an Apple GPU under the asahi kernel driver and the ROM has its Vulkan driver; defaulting gpu_mode=honeykrisp"
+    printf '%s\n' "honeykrisp"
     return 0
   fi
   if venus_blocker="$(host_suits_venus)"; then
