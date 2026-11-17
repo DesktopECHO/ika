@@ -2,7 +2,10 @@
 
 # The host display's size: the largest current Wayland output mode, read again
 # while a Wayland session has none yet; else the DRM connectors; else the size
-# found last, which every probe that finds one saves.
+# found last, which every probe that finds one saves. Under WSLg, an output at
+# Weston's RDP default of 640x480 is no display: WSLg has it while no Windows
+# desktop is connected, and a start from a scheduled task saved it. Such a
+# start with no size found last takes 1920x1080, without saving it.
 
 set -euo pipefail
 
@@ -91,5 +94,55 @@ expect_equal "$(cat "${T}/runs")" "1" "wayland-info read once outside Wayland"
 
 rm -f "${HOST_DISPLAY_SIZE_FILE}"
 expect_equal "$(probe)" "none" "nothing found, nothing saved"
+
+export WAYLAND_DISPLAY=wayland-0
+modes 2560x1440
+probe >/dev/null
+IKA_ON_WSLG=true
+modes 640x480
+expect_equal "$(probe)" "2560x1440" "WSLg without a desktop: size found last"
+expect_equal "$(cat "${HOST_DISPLAY_SIZE_FILE}")" "2560x1440" "WSLg's placeholder not saved"
+
+echo 640x480 >"${HOST_DISPLAY_SIZE_FILE}"
+expect_equal "$(probe)" "1920x1080" "WSLg: a saved placeholder is not reused"
+expect_equal "$(cat "${HOST_DISPLAY_SIZE_FILE}")" "640x480" "WSLg: the stand-in size not saved"
+[[ "$(cat "${T}/log")" == *"no Windows desktop connected to WSLg; using 1920x1080"* ]] \
+  || fail "stand-in size not logged"
+
+rm -f "${HOST_DISPLAY_SIZE_FILE}"
+expect_equal "$(probe)" "1920x1080" "WSLg without a desktop or a size found last"
+[[ ! -e "${HOST_DISPLAY_SIZE_FILE}" ]] || fail "WSLg: the stand-in size was saved"
+
+modes 640x480 1920x1080
+expect_equal "$(probe)" "1920x1080" "WSLg: a desktop beside the placeholder"
+IKA_ON_WSLG=false
+
+modes 640x480
+expect_equal "$(probe)" "640x480" "a 640x480 output outside WSLg"
+
+# The refresh rate of the same output, read by the launcher as it runs, with
+# unset variables an error.
+probe_refresh() {
+  _wayland_info_probed=""
+  _wayland_info_output=""
+  _host_display_refresh_hz_probed=""
+  _host_display_refresh_hz_value=""
+  echo 0 >"${T}/empty_runs"
+  (set -u; host_display_refresh_hz) || printf 'none\n'
+}
+modes 2560x1440
+expect_equal "$(probe_refresh)" "60" "refresh rate of the largest current mode"
+IKA_ON_WSLG=true
+modes 640x480
+expect_equal "$(probe_refresh)" "60" "WSLg without a desktop: the rate WSLg presents at"
+IKA_ON_WSLG=false
+
+# A wayland-info that times out, as it can under WSLg with no desktop, is not
+# run again.
+timeout() { "${@:2}" >/dev/null; return 124; }
+modes
+expect_equal "$(probe)" "640x480" "wayland-info timed out: size found last"
+expect_equal "$(cat "${T}/runs")" "1" "wayland-info not run again after a timeout"
+unset -f timeout
 
 echo "PASS: test_ika_host_display_size"

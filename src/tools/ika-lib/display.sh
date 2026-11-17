@@ -200,12 +200,17 @@ _wayland_info_probed=""
 _wayland_info_output=""
 wayland_info_output() {
   local attempt
+  local status
 
   if [[ -z "${_wayland_info_probed}" ]]; then
     _wayland_info_probed="yes"
     if command -v wayland-info >/dev/null 2>&1; then
       for (( attempt = 0; attempt < 8; ++attempt )); do
-        _wayland_info_output="$(wayland-info 2>/dev/null || true)"
+        # WSLg's compositor can leave it waiting for good when no Windows
+        # desktop is connected.
+        status=0
+        _wayland_info_output="$(timeout 5 wayland-info 2>/dev/null)" || status=$?
+        (( status != 124 )) || break
         [[ -n "${WAYLAND_DISPLAY:-}" ]] || break
         grep -q 'flags:.*current' <<<"${_wayland_info_output}" && break
         sleep 0.25
@@ -221,21 +226,32 @@ wayland_info_output() {
 # (monitors asleep report none, and some hosts' DRM connectors are not the
 # outputs). Probed at most once per run and cached: a single start queries it
 # more than once (DPI heuristic + display ceiling).
+#
+# While no Windows desktop is connected to WSLg (a start from a scheduled task
+# or over ssh), its output has Weston's RDP default mode, 640x480: that is no
+# display, and neither saving it nor reusing a saved one would be right. With
+# no size found last either, such a start takes 1920x1080, which it does not
+# save, so the first start that finds the desktop takes the desktop's size.
+WSLG_PLACEHOLDER_SIZE="640x480"
+WSLG_NO_DESKTOP_SIZE="1920x1080"
 _host_display_size_probed=""
 _host_display_size_value=""
 host_display_size() {
+  local placeholder=""
+
+  [[ "${IKA_ON_WSLG}" != true ]] || placeholder="${WSLG_PLACEHOLDER_SIZE}"
   if [[ -z "${_host_display_size_probed}" ]]; then
     _host_display_size_probed="yes"
     if wayland_info_output >/dev/null; then
       _host_display_size_value="$(
-        wayland_info_output | awk '
+        wayland_info_output | awk -v placeholder="${placeholder}" '
           /mode:/ { in_mode = 1; width = 0; height = 0; next }
           in_mode && /width:/ {
             w = $0; sub(/.*width:[[:space:]]*/, "", w);  width  = int(w)
             h = $0; sub(/.*height:[[:space:]]*/, "", h); height = int(h)
           }
           in_mode && /flags:/ {
-            if (/current/ && width && height) {
+            if (/current/ && width && height && width "x" height != placeholder) {
               area = width * height
               if (area > best_area) {
                 best_area = area; best_width = width; best_height = height
@@ -256,8 +272,12 @@ host_display_size() {
       fi
     else
       _host_display_size_value="$(cat "${HOST_DISPLAY_SIZE_FILE}" 2>/dev/null || true)"
-      if [[ "${_host_display_size_value}" =~ ^[0-9]+x[0-9]+$ ]]; then
+      if [[ "${_host_display_size_value}" =~ ^[0-9]+x[0-9]+$ \
+        && "${_host_display_size_value}" != "${placeholder}" ]]; then
         log "no host display found; using the size it had last, ${_host_display_size_value}"
+      elif [[ "${IKA_ON_WSLG}" == true ]]; then
+        _host_display_size_value="${WSLG_NO_DESKTOP_SIZE}"
+        log "no Windows desktop connected to WSLg; using ${_host_display_size_value} until one is"
       else
         _host_display_size_value=""
       fi
