@@ -1,0 +1,18 @@
+Patch summary:
+The arm64 product takes the GNSS HAL's policy, as the x86 one does. The
+desktop product installs the GNSS HAL on both, but ika_arm64/BoardConfig.mk,
+copied from vsoc_arm64_pgagnostic, left out shared/gnss/BoardConfig.mk, so
+/dev/hvc6 and /dev/hvc7 stayed plain device instead of gnss_device and the
+HAL was denied them.
+
+diff --git a/ika_arm64/BoardConfig.mk b/ika_arm64/BoardConfig.mk
+--- a/ika_arm64/BoardConfig.mk
++++ b/ika_arm64/BoardConfig.mk
+@@ -46,6 +46,7 @@
+ -include device/google/cuttlefish/shared/BoardConfig.mk
+ -include device/google/cuttlefish/shared/bluetooth/BoardConfig.mk
+ -include device/google/cuttlefish/shared/camera/BoardConfig.mk
++-include device/google/cuttlefish/shared/gnss/BoardConfig.mk
+ -include device/google/cuttlefish/shared/graphics/BoardConfig.mk
+ -include device/google/cuttlefish/shared/identity/BoardConfig.mk
+ -include device/google/cuttlefish/shared/sensors/BoardConfig.mk

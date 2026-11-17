@@ -1,0 +1,27 @@
+Patch summary:
+The arm64 guest's 16K kernel no longer gets a second DRM card from vkms.
+First-stage init loads every module of the 16K ramdisk, vkms among them, with
+no options, so vkms created its default device (card1) before the vendor
+init's "modprobe vkms.ko create_default_dev=0". Mesa reads each card's sysfs
+uevent as it looks for the GPU, and SurfaceFlinger and apps were denied
+reading vkms's at every boot. vkms.create_default_dev=0 on the kernel command
+line reaches that first load (libmodprobe takes module options from
+/proc/cmdline), so the 16K guest has the 4K and x86 guests' one card. vkms
+stays in the 16K ramdisk: the vendor copy is the 4K build.
+
+diff --git a/ika_arm64/BoardConfig.mk b/ika_arm64/BoardConfig.mk
+--- a/ika_arm64/BoardConfig.mk
++++ b/ika_arm64/BoardConfig.mk
+@@ -94,3 +94,12 @@
+ TARGET_BOARD_INFO_FILES := \
+     device/google/cuttlefish/shared/desktop/android-info.txt \
+     device/google/cuttlefish/shared/desktop/android-info-asahi.txt
++
++# First-stage init loads every module of the 16K ramdisk with no options,
++# vkms among them, so vkms made its default device, a second DRM card, before
++# init.cutf_cvm.rc's "modprobe vkms.ko create_default_dev=0" (a no-op once it
++# is loaded). libmodprobe takes module options from the kernel command line,
++# first stage included. vkms stays in the 16K ramdisk, as the vendor copy is
++# the 4K build. The x86 and 4K kernels load vkms only through init.cutf_cvm.rc,
++# where the option changes nothing.
++BOARD_KERNEL_CMDLINE += vkms.create_default_dev=0
