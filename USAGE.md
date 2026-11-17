@@ -502,10 +502,12 @@ in only when `/etc/fuse.conf` has `user_allow_other`; `ika-wsl-setup` sets it.
 From a terminal, the folder is `/run/user/<uid>/ika/Android` (in
 `$XDG_RUNTIME_DIR`, or `~/ika/Android` without one). Outside your home
 folder, it is left alone by backups and other programs that walk your home
-folder. `ika start` mounts it and adds it to the sidebar; `ika stop`,
-`ika restart` and `ika reset` unmount it and take it out of the sidebar, and
-so does Android turning off by itself, from its power menu, within a few
-seconds.
+folder. `ika start` mounts it and adds it to the sidebar, once Android has
+its storage ready (on a busy host that can take a while: Ika keeps trying
+every 30 seconds while Android runs, and mounts it again if the mount ends);
+`ika stop`, `ika restart` and `ika reset` unmount it and take it out of the
+sidebar, and so does Android turning off by itself, from its power menu,
+within a few seconds.
 
 Files are read as they are used, over Ika's adb connection, so a large video
 plays without being copied first. Files an app keeps to itself are out of

@@ -20,7 +20,8 @@ fuse_allows_other() {
 # madbfs-server from the ROM and goes on in the background. On a rooted ROM
 # (ika root) it mounts the whole filesystem, /, with the server run as root.
 # Ika's adb comes first on PATH: an adb of another version would restart the
-# adb server under the console.
+# adb server under the console. When the mount fails, the storage watcher
+# tries again while Android runs.
 mount_android_storage() {
   local adb_serial="$1"
   local -a root_args=(--root=/sdcard)
@@ -54,6 +55,12 @@ mount_android_storage() {
     done
     # Another start may have mounted it during the wait.
     android_storage_mounted && return 0
+    # On a busy host Android can take longer.
+    if ! guest_adb "${adb_serial}" shell 'test -d /sdcard/' >/dev/null 2>&1; then
+      log "Android has not mounted /sdcard yet; Android's files are mounted once it has"
+      start_storage_watcher
+      return 0
+    fi
   fi
   # A madbfs that did not exit cleanly leaves its control socket behind, and
   # its server on Android holding the port.
@@ -81,7 +88,9 @@ mount_android_storage() {
     edit_android_storage_place add
     start_storage_watcher
   else
-    log "warning: could not mount Android storage on ${ANDROID_STORAGE_DIR}; see ${MADBFS_LOG_FILE}"
+    log "warning: could not mount Android storage on ${ANDROID_STORAGE_DIR}; trying again in" \
+      "${STORAGE_REMOUNT_SEC} seconds; see ${MADBFS_LOG_FILE}"
+    start_storage_watcher
   fi
 }
 
@@ -244,17 +253,29 @@ unmount_android_storage_at() {
 
 # Unmounts Android's storage once the VM has stopped by itself, as when Android
 # is turned off from its own menu: otherwise it stays mounted, on a device that
-# is gone, until the next ika start or stop. Started with the mount; stop,
+# is gone, until the next ika start or stop. While the VM runs, it mounts the
+# storage again every STORAGE_REMOUNT_SEC when it is not mounted: on a busy
+# host Android can mount /sdcard after the start stopped waiting for it, and
+# madbfs can end. Started with the mount, or by a mount that failed; stop,
 # restart and reset end it before they unmount.
 run_storage_watcher() {
   local lock_fd
+  local adb_serial
+  local next_mount
 
   exec {lock_fd}>"${STORAGE_WATCHER_LOCK_FILE}"
   flock -n "${lock_fd}" || return 0
   printf '%s\n' "$$" >"${STORAGE_WATCHER_PID_FILE}"
   trap 'exit 0' INT TERM HUP
   trap storage_watcher_cleanup EXIT
+  adb_serial="$(resolve_adb_serial)"
+  # The mount that started it has just tried.
+  next_mount="${STORAGE_REMOUNT_SEC}"
   while has_live_cvd_processes; do
+    if (( SECONDS >= next_mount )) && ! android_storage_mounted; then
+      mount_android_storage "${adb_serial}" || true
+      next_mount=$((SECONDS + STORAGE_REMOUNT_SEC))
+    fi
     sleep "${STORAGE_WATCHER_POLL_SEC}" &
     wait "$!"
   done

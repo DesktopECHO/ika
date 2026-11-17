@@ -3,7 +3,9 @@
 # Android's files stay mounted only while the VM runs: the storage watcher,
 # started with the mount (or by a start that finds it mounted), unmounts them
 # once the VM stops by itself, as when Android is turned off from its power
-# menu. ika stop, restart and reset end the watcher before they unmount.
+# menu. ika stop, restart and reset end the watcher before they unmount. A
+# mount that fails, or finds Android has not mounted /sdcard yet on a busy
+# host, leaves the watcher to mount Android's files once it can.
 
 set -euo pipefail
 
@@ -26,6 +28,8 @@ calls() { cat "${T}/calls" 2>/dev/null || true; }
 # The VM runs for two checks, then stops by itself. (The watcher runs in a
 # subshell, so the checks are counted in a file.)
 STORAGE_WATCHER_POLL_SEC=0
+STORAGE_REMOUNT_SEC=1000
+resolve_adb_serial() { printf 'serial\n'; }
 has_live_cvd_processes() {
   echo >>"${T}/checks"
   (( $(wc -l <"${T}/checks") <= 2 ))
@@ -70,6 +74,52 @@ android_storage_mounted() { return 0; }
 mount_android_storage serial 2>/dev/null
 [[ "$(calls)" == "watcher" ]] || fail "a start that found the mount did not start the watcher: $(calls)"
 echo "ok: the mount starts the watcher"
+
+# On a busy host Android has not mounted /sdcard when the start stops waiting
+# for it: the mount leaves it to the watcher, without running madbfs.
+SECONDS=100
+guest_adb() { [[ "$*" != *"test -d /sdcard/"* ]]; }
+printf '#!/bin/sh\necho ran >>"%s/madbfs-runs"\nexit 1\n' "${T}" >"${T}/madbfs"
+: >"${T}/calls"
+android_storage_mounted() { return 1; }
+mount_android_storage serial 2>"${T}/mount.log"
+grep -qx watcher "${T}/calls" || fail "a mount before /sdcard did not start the watcher: $(calls)"
+[[ ! -e "${T}/madbfs-runs" ]] || fail "madbfs ran before Android mounted /sdcard"
+grep -q "has not mounted /sdcard yet" "${T}/mount.log" || fail "not logged: $(<"${T}/mount.log")"
+echo "ok: a mount before Android has /sdcard is left to the watcher"
+
+# madbfs fails: the warning says it is tried again, and the watcher starts.
+guest_adb() { return 0; }
+: >"${T}/calls"
+mount_android_storage serial 2>"${T}/mount.log"
+[[ -e "${T}/madbfs-runs" ]] || fail "madbfs did not run"
+grep -qx watcher "${T}/calls" || fail "a failed mount did not start the watcher: $(calls)"
+grep -q "trying again in ${STORAGE_REMOUNT_SEC} seconds" "${T}/mount.log" ||
+  fail "not logged: $(<"${T}/mount.log")"
+echo "ok: a failed mount starts the watcher"
+
+# The watcher mounts again while the VM runs and the files are not mounted,
+# no sooner than STORAGE_REMOUNT_SEC after the mount that started it, and not
+# while they are mounted.
+# A second passes at each check.
+mount_android_storage() {
+  printf 'mount %s at check %s\n' "$1" "$(wc -l <"${T}/checks")" >>"${T}/calls"
+  touch "${T}/mounted"
+}
+android_storage_mounted() { [[ -e "${T}/mounted" ]]; }
+has_live_cvd_processes() {
+  SECONDS=$((SECONDS + 1))
+  echo >>"${T}/checks"
+  (( $(wc -l <"${T}/checks") <= 4 ))
+}
+STORAGE_REMOUNT_SEC=2
+: >"${T}/calls"
+: >"${T}/checks"
+( SECONDS=0; run_storage_watcher 2>/dev/null )
+[[ "$(grep '^mount' "${T}/calls")" == "mount serial at check 2" ]] ||
+  fail "the watcher did not mount once, ${STORAGE_REMOUNT_SEC} seconds in: $(calls)"
+echo "ok: the watcher mounts Android's files once it can"
+rm -f "${T}/mounted"
 
 # stop, restart and reset end the watcher before they unmount
 : >"${T}/calls"

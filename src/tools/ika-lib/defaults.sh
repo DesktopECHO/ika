@@ -191,6 +191,7 @@ MADBFS_LOG_FILE="${CVD_HOME_DIR}/madbfs.log"
 STORAGE_WATCHER_PID_FILE="${CVD_TMP_DIR}/storage-watcher.pid"
 STORAGE_WATCHER_LOCK_FILE="${CVD_TMP_DIR}/storage-watcher.lock"
 STORAGE_WATCHER_POLL_SEC=2
+STORAGE_REMOUNT_SEC=30
 APP_LIST_CACHE="${IKA_APPS_DIR}/app-list"
 # Start options saved for each app: see saved_app_options.
 APP_OPTIONS_FILE="${CVD_HOME_DIR}/app-options.ini"
