@@ -1,0 +1,290 @@
+dzn: Store bytes to write-only storage buffers through an R8_UINT view
+
+Generated-by: LLM
+diff --git a/src/microsoft/vulkan/dzn_descriptor_set.c b/src/microsoft/vulkan/dzn_descriptor_set.c
+index f75ecf7..81aa099 100644
+--- a/src/microsoft/vulkan/dzn_descriptor_set.c
++++ b/src/microsoft/vulkan/dzn_descriptor_set.c
+@@ -108,7 +108,8 @@ dzn_descriptor_type_depends_on_shader_usage(VkDescriptorType type, bool bindless
+ static bool
+ dzn_descriptor_type_has_extra_uav(const struct dzn_device *device, VkDescriptorType type)
+ {
+-   return device->storage_image_int_views && type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
++   return (device->storage_image_int_views && type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) ||
++          (device->storage_buffer_byte_views && type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+ }
+ 
+ static inline bool
+@@ -757,7 +758,9 @@ dzn_pipeline_layout_create(struct dzn_device *device,
+                   set_layout->bindings[b].immutable_sampler_idx == STATIC_SAMPLER_TAG)
+             layout->binding_translation[j].binding_class[b] = DZN_PIPELINE_BINDING_STATIC_SAMPLER;
+          else if (set_layout->bindings[b].extra_uav)
+-            layout->binding_translation[j].binding_class[b] = DZN_PIPELINE_BINDING_INT_VIEW;
++            layout->binding_translation[j].binding_class[b] =
++               set_layout->bindings[b].type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE ?
++               DZN_PIPELINE_BINDING_INT_VIEW : DZN_PIPELINE_BINDING_BYTE_VIEW;
+          else
+             layout->binding_translation[j].binding_class[b] = DZN_PIPELINE_BINDING_NORMAL;
+       }
+@@ -1136,6 +1139,29 @@ dzn_descriptor_heap_write_image_view_int_uav(struct dzn_device *device,
+                                            dzn_descriptor_heap_get_cpu_handle(heap, desc_offset));
+ }
+ 
++void
++dzn_descriptor_heap_write_buffer_byte_uav(struct dzn_device *device,
++                                          struct dzn_descriptor_heap *heap,
++                                          uint32_t desc_offset,
++                                          const struct dzn_buffer_desc *info)
++{
++   VkDeviceSize size =
++      info->range == VK_WHOLE_SIZE ?
++      info->buffer->size - info->offset :
++      info->range;
++   D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
++      .Format = DXGI_FORMAT_R8_UINT,
++      .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
++      .Buffer = {
++         .FirstElement = info->offset,
++         .NumElements = (UINT)MIN2(size, 1u << D3D12_REQ_BUFFER_RESOURCE_TEXEL_COUNT_2_TO_EXP),
++      },
++   };
++
++   ID3D12Device1_CreateUnorderedAccessView(device->dev, info->buffer->res, NULL, &uav_desc,
++                                           dzn_descriptor_heap_get_cpu_handle(heap, desc_offset));
++}
++
+ void
+ dzn_descriptor_heap_write_buffer_view_desc(struct dzn_device *device,
+                                            struct dzn_descriptor_heap *heap,
+@@ -1784,6 +1810,7 @@ dzn_descriptor_set_write_buffer_desc(struct dzn_device *device,
+                                      struct dzn_descriptor_set *set,
+                                      uint32_t heap_offset,
+                                      uint32_t alt_heap_offset,
++                                     uint32_t extra_heap_offset,
+                                      const struct dzn_buffer_desc *bdesc)
+ {
+    D3D12_DESCRIPTOR_HEAP_TYPE type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+@@ -1811,6 +1838,13 @@ dzn_descriptor_set_write_buffer_desc(struct dzn_device *device,
+                                             alt_heap_offset,
+                                             false, bdesc);
+    }
++
++   if (extra_heap_offset != ~0) {
++      assert(primary_writable);
++      dzn_descriptor_heap_write_buffer_byte_uav(device, &set->pool->heaps[type],
++                                                set->heap_offsets[type] + extra_heap_offset,
++                                                bdesc);
++   }
+ }
+ 
+ static void
+@@ -1825,8 +1859,10 @@ dzn_descriptor_set_ptr_write_buffer_desc(struct dzn_device *device,
+       dzn_descriptor_set_ptr_get_heap_offset(set->layout, type, ptr, false, device->bindless);
+    uint32_t alt_heap_offset =
+       dzn_descriptor_set_ptr_get_heap_offset(set->layout, type, ptr, true, device->bindless);
++   uint32_t extra_heap_offset = dzn_descriptor_set_ptr_get_extra_uav_heap_offset(set->layout, ptr);
+ 
+-   dzn_descriptor_set_write_buffer_desc(device, desc_type, set, heap_offset, alt_heap_offset, bdesc);
++   dzn_descriptor_set_write_buffer_desc(device, desc_type, set, heap_offset, alt_heap_offset,
++                                        extra_heap_offset, bdesc);
+ }
+ 
+ static void
+@@ -3010,9 +3046,12 @@ dzn_UpdateDescriptorSetWithTemplate(VkDevice _device,
+                info->range, info->offset
+             };
+ 
++            uint32_t extra_heap_offset =
++               entry->heap_offsets.extra_uav != ~0 ? entry->heap_offsets.extra_uav + d : ~0;
++
+             if (desc.buffer)
+                dzn_descriptor_set_write_buffer_desc(device, entry->type, set, heap_offset,
+-                                                    alt_heap_offset, &desc);
++                                                    alt_heap_offset, extra_heap_offset, &desc);
+          }
+          break;
+ 
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index e97edfd..d30f29a 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -216,6 +216,7 @@ static const struct debug_control dzn_debug_options[] = {
+    { "api12", DZN_DEBUG_API_1_2 },
+    { "nodiscard", DZN_DEBUG_NO_DISCARD },
+    { "nointviews", DZN_DEBUG_NO_INT_VIEWS },
++   { "nobyteviews", DZN_DEBUG_NO_BYTE_VIEWS },
+    { NULL, 0 }
+ };
+ 
+@@ -399,6 +400,8 @@ dzn_physical_device_init_uuids(struct dzn_physical_device *pdev)
+                      offsetof(struct dzn_physical_device, shader_model));
+    _mesa_blake3_update(&blake3_ctx, &pdev->storage_image_int_views,
+                        sizeof(pdev->storage_image_int_views));
++   _mesa_blake3_update(&blake3_ctx, &pdev->storage_buffer_byte_views,
++                       sizeof(pdev->storage_buffer_byte_views));
+    _mesa_blake3_final(&blake3_ctx, blake3);
+    memcpy(pdev->pipeline_cache_uuid, blake3, VK_UUID_SIZE);
+ 
+@@ -500,6 +503,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+       pdev->desc.vendor_id == 0x8086 &&
+       pdev->shader_model < D3D_SHADER_MODEL_6_6 &&
+       !(instance->debug_flags & DZN_DEBUG_NO_INT_VIEWS);
++   pdev->storage_buffer_byte_views = !(instance->debug_flags & DZN_DEBUG_NO_BYTE_VIEWS);
+    dzn_physical_device_get_options(pdev, 13, D3D12_FEATURE_D3D12_OPTIONS13, &pdev->options13, sizeof(pdev->options13));
+    dzn_physical_device_get_options(pdev, 14, D3D12_FEATURE_D3D12_OPTIONS14, &pdev->options14, sizeof(pdev->options14));
+    dzn_physical_device_get_options(pdev, 15, D3D12_FEATURE_D3D12_OPTIONS15, &pdev->options15, sizeof(pdev->options15));
+@@ -2715,6 +2719,7 @@ dzn_device_create(struct dzn_physical_device *pdev,
+       device->vk.enabled_features.bufferDeviceAddress ||
+       device->vk.enabled_extensions.EXT_buffer_device_address;
+    device->storage_image_int_views = pdev->storage_image_int_views && !device->bindless;
++   device->storage_buffer_byte_views = pdev->storage_buffer_byte_views && !device->bindless;
+ 
+    if (device->bindless) {
+       uint32_t sampler_count = MIN2(pdev->options19.MaxSamplerDescriptorHeapSize, 4000);
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index b6b00b6..50e3ee7 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -522,6 +522,7 @@ adjust_to_bindless_cb(struct dxil_spirv_binding_remapping *inout, void *context)
+       FALLTHROUGH;
+    case DZN_PIPELINE_BINDING_NORMAL:
+    case DZN_PIPELINE_BINDING_INT_VIEW:
++   case DZN_PIPELINE_BINDING_BYTE_VIEW:
+       inout->binding = new_binding;
+       break;
+    default:
+@@ -529,6 +530,74 @@ adjust_to_bindless_cb(struct dxil_spirv_binding_remapping *inout, void *context)
+    }
+ }
+ 
++static nir_variable *
++get_byte_view_var(nir_shader *shader, unsigned space, unsigned reg)
++{
++   nir_foreach_variable_with_modes(var, shader, nir_var_image) {
++      if (var->data.descriptor_set == space && var->data.binding == reg &&
++          var->data.image.format == PIPE_FORMAT_R8_UINT)
++         return var;
++   }
++
++   nir_variable *var =
++      nir_variable_create(shader, nir_var_image,
++                          glsl_image_type(GLSL_SAMPLER_DIM_BUF, false, GLSL_TYPE_UINT), NULL);
++   var->data.descriptor_set = space;
++   var->data.binding = reg;
++   var->data.image.format = PIPE_FORMAT_R8_UINT;
++   var->data.access = ACCESS_NON_READABLE;
++   return var;
++}
++
++static bool
++lower_byte_store_to_view(nir_builder *b, nir_intrinsic_instr *intr, void *data)
++{
++   const struct dzn_pipeline_layout *layout = data;
++
++   if (intr->intrinsic != nir_intrinsic_store_ssbo ||
++       nir_src_bit_size(intr->src[0]) != 8 ||
++       !(nir_intrinsic_access(intr) & ACCESS_NON_READABLE))
++      return false;
++
++   nir_scalar desc = nir_scalar_chase_movs(nir_get_scalar(intr->src[1].ssa, 0));
++   if (!nir_scalar_is_intrinsic(desc) ||
++       nir_scalar_intrinsic_op(desc) != nir_intrinsic_load_vulkan_descriptor)
++      return false;
++
++   nir_intrinsic_instr *res = nir_src_as_intrinsic(nir_def_as_intrinsic(desc.def)->src[0]);
++   if (!res || res->intrinsic != nir_intrinsic_vulkan_resource_index ||
++       !nir_src_is_const(res->src[0]))
++      return false;
++
++   unsigned set = nir_intrinsic_desc_set(res), binding = nir_intrinsic_binding(res);
++   if (set >= layout->set_count ||
++       binding >= layout->binding_translation[set].binding_count ||
++       layout->binding_translation[set].binding_class[binding] != DZN_PIPELINE_BINDING_BYTE_VIEW)
++      return false;
++
++   nir_variable *var =
++      get_byte_view_var(b->shader, DZN_REGISTER_SPACE_EXTRA_UAVS + set,
++                        layout->binding_translation[set].base_reg[binding] +
++                        nir_src_as_uint(res->src[0]));
++
++   b->cursor = nir_before_instr(&intr->instr);
++   nir_deref_instr *deref = nir_build_deref_var(b, var);
++   nir_def *undef = nir_undef(b, 1, 32);
++   nir_def *zero = nir_imm_int(b, 0);
++   u_foreach_bit(c, nir_intrinsic_write_mask(intr)) {
++      nir_def *coord = nir_vec4(b, nir_iadd_imm(b, intr->src[2].ssa, c), undef, undef, undef);
++      nir_def *value = nir_vec4(b, nir_u2u32(b, nir_channel(b, intr->src[0].ssa, c)), zero, zero, zero);
++      nir_image_deref_store(b, &deref->def, coord, undef, value, zero,
++                            .image_dim = GLSL_SAMPLER_DIM_BUF,
++                            .format = PIPE_FORMAT_R8_UINT,
++                            .access = ACCESS_NON_READABLE,
++                            .src_type = nir_type_uint32);
++   }
++
++   nir_instr_remove(&intr->instr);
++   return true;
++}
++
+ static bool
+ adjust_var_bindings(nir_shader *shader,
+                     struct dzn_device *device,
+@@ -538,6 +607,10 @@ adjust_var_bindings(nir_shader *shader,
+    uint32_t modes = nir_var_image | nir_var_uniform | nir_var_mem_ubo | nir_var_mem_ssbo;
+    blake3_hasher bindings_hash_ctx;
+ 
++   if (device->storage_buffer_byte_views)
++      nir_shader_intrinsics_pass(shader, lower_byte_store_to_view,
++                                 nir_metadata_control_flow, (void *)layout);
++
+    if (bindings_hash)
+       _mesa_blake3_init(&bindings_hash_ctx);
+ 
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 7e7ba8b..569f066 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -175,6 +175,7 @@ struct dzn_physical_device {
+    bool emulate_etc2;
+    bool emulate_astc;
+    bool storage_image_int_views;
++   bool storage_buffer_byte_views;
+ 
+    uint32_t queue_family_count;
+    struct dzn_queue_family {
+@@ -324,6 +325,7 @@ struct dzn_device {
+ 
+    bool bindless;
+    bool storage_image_int_views;
++   bool storage_buffer_byte_views;
+    bool support_static_samplers;
+    struct dzn_device_descriptor_heap device_heaps[NUM_POOL_TYPES];
+ 
+@@ -551,6 +553,12 @@ dzn_descriptor_heap_write_image_view_int_uav(struct dzn_device *device,
+                                              uint32_t heap_offset,
+                                              const struct dzn_image_view *iview);
+ 
++void
++dzn_descriptor_heap_write_buffer_byte_uav(struct dzn_device *device,
++                                          struct dzn_descriptor_heap *heap,
++                                          uint32_t heap_offset,
++                                          const struct dzn_buffer_desc *info);
++
+ void
+ dzn_descriptor_heap_write_buffer_view_desc(struct dzn_device *device,
+                                            struct dzn_descriptor_heap *heap,
+@@ -985,6 +993,7 @@ enum dzn_pipeline_binding_class {
+    DZN_PIPELINE_BINDING_DYNAMIC_BUFFER,
+    DZN_PIPELINE_BINDING_STATIC_SAMPLER,
+    DZN_PIPELINE_BINDING_INT_VIEW,
++   DZN_PIPELINE_BINDING_BYTE_VIEW,
+ };
+ 
+ struct dzn_pipeline_layout {
+@@ -1555,6 +1564,7 @@ enum dzn_debug_flags {
+    DZN_DEBUG_API_1_2 = 1 << 18,
+    DZN_DEBUG_NO_DISCARD = 1 << 19,
+    DZN_DEBUG_NO_INT_VIEWS = 1 << 20,
++   DZN_DEBUG_NO_BYTE_VIEWS = 1 << 21,
+ };
+ 
+ /* Whether host-visible memory and upload buffers use write-back CPU pages.

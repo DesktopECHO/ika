@@ -482,6 +482,39 @@ particles drew with what the texture's memory held before, as black shapes,
 white flashes and blocks of solid color. Drivers with enhanced barriers
 discard through those.
 
+Direct3D 12 writes a storage buffer 32 bits at a time at the least, so
+Dozen turns a shader's store of a single byte into two atomic operations on
+the 32 bits around it, and the invocations that write the other three bytes
+wait on each other: on an Iris Plus 650 a compute shader that stores a byte
+per invocation, as image filters on 8-bit pixels do, ran 20 times slower or
+more than in Intel's own Vulkan driver. When the shader only writes the
+buffer, Ika's Dozen gives it a second view, of one-byte elements
+(`R8_UINT`), and the shader stores its bytes through that
+([dzn-storage-buffer-byte-views.patch](src/tools/mesa/dzn-storage-buffer-byte-views.patch)).
+Storing a byte per invocation from 32×8 workgroups became ten times faster
+on the Iris Plus 650, about as fast as typed stores are in Intel's own
+driver. Bytes stored to a buffer the shader also reads keep the atomic
+operations.
+
+Intel's D3D12 driver lays out the invocations of a two- or three-dimensional
+compute workgroup, such as 32×8, in an order that suits images, and a
+workgroup that works on rows of a buffer then reads and writes several rows
+with every instruction. Ika's Dozen declares such a workgroup as one row,
+32×8 as 256×1, when the shader uses no image or texture, and works out each
+invocation's position in the workgroup itself
+([dzn-flatten-buffer-workgroups.patch](src/tools/mesa/dzn-flatten-buffer-workgroups.patch)).
+On the Iris Plus 650 a 3×3 filter over an 8-bit buffer in 32×8 workgroups
+became four and a half times faster.
+
+On Intel's D3D12 drivers without shader model 6.6, such as the Iris Plus
+650's, Ika's Dozen reads and writes storage images in a float, unorm or
+snorm format through a second view in the integer format of the same size,
+and the shader converts the texels
+([dzn-storage-image-int-views.patch](src/tools/mesa/dzn-storage-image-int-views.patch)).
+Those drivers load such texels about ten times slower than integer ones, and
+in some formats, such as R8G8B8A8_SNORM and R16_UNORM, load zeros. Shaders
+that read an image without declaring its format still use the first view.
+
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window

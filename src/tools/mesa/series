@@ -36,3 +36,6 @@ dzn-import-own-export.patch
 dzn-discard-placed-targets.patch
 dzn-texcompress-emulation.patch
 dzn-recycle-default-bufs.patch
+dzn-storage-image-int-views.patch
+dzn-storage-buffer-byte-views.patch
+dzn-flatten-buffer-workgroups.patch

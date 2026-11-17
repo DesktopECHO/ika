@@ -1,0 +1,128 @@
+dzn: Declare buffer-only compute workgroups one-dimensional
+
+Generated-by: LLM
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index d30f29a..67dcfdb 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -217,6 +217,7 @@ static const struct debug_control dzn_debug_options[] = {
+    { "nodiscard", DZN_DEBUG_NO_DISCARD },
+    { "nointviews", DZN_DEBUG_NO_INT_VIEWS },
+    { "nobyteviews", DZN_DEBUG_NO_BYTE_VIEWS },
++   { "noflattenworkgroups", DZN_DEBUG_NO_FLATTEN_WORKGROUPS },
+    { NULL, 0 }
+ };
+ 
+@@ -402,6 +403,8 @@ dzn_physical_device_init_uuids(struct dzn_physical_device *pdev)
+                        sizeof(pdev->storage_image_int_views));
+    _mesa_blake3_update(&blake3_ctx, &pdev->storage_buffer_byte_views,
+                        sizeof(pdev->storage_buffer_byte_views));
++   _mesa_blake3_update(&blake3_ctx, &pdev->flatten_workgroups,
++                       sizeof(pdev->flatten_workgroups));
+    _mesa_blake3_final(&blake3_ctx, blake3);
+    memcpy(pdev->pipeline_cache_uuid, blake3, VK_UUID_SIZE);
+ 
+@@ -504,6 +507,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+       pdev->shader_model < D3D_SHADER_MODEL_6_6 &&
+       !(instance->debug_flags & DZN_DEBUG_NO_INT_VIEWS);
+    pdev->storage_buffer_byte_views = !(instance->debug_flags & DZN_DEBUG_NO_BYTE_VIEWS);
++   pdev->flatten_workgroups = !(instance->debug_flags & DZN_DEBUG_NO_FLATTEN_WORKGROUPS);
+    dzn_physical_device_get_options(pdev, 13, D3D12_FEATURE_D3D12_OPTIONS13, &pdev->options13, sizeof(pdev->options13));
+    dzn_physical_device_get_options(pdev, 14, D3D12_FEATURE_D3D12_OPTIONS14, &pdev->options14, sizeof(pdev->options14));
+    dzn_physical_device_get_options(pdev, 15, D3D12_FEATURE_D3D12_OPTIONS15, &pdev->options15, sizeof(pdev->options15));
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index 50e3ee7..1cf6988 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -389,6 +389,61 @@ dzn_nir_lower_storage_image_int_access(nir_shader *nir)
+    return progress;
+ }
+ 
++static bool
++uses_images(nir_builder *b, nir_instr *instr, void *data)
++{
++   if (instr->type == nir_instr_type_tex)
++      return true;
++   if (instr->type != nir_instr_type_intrinsic)
++      return false;
++   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++   return strstr(nir_intrinsic_infos[intr->intrinsic].name, "image") != NULL;
++}
++
++static bool
++flatten_workgroup_ids(nir_builder *b, nir_intrinsic_instr *intr, void *data)
++{
++   const uint16_t *size = data;
++
++   if (intr->intrinsic != nir_intrinsic_load_local_invocation_id &&
++       intr->intrinsic != nir_intrinsic_load_global_invocation_id &&
++       intr->intrinsic != nir_intrinsic_load_workgroup_size)
++      return false;
++
++   b->cursor = nir_before_instr(&intr->instr);
++   nir_def *wg_size = nir_imm_ivec3(b, size[0], size[1], size[2]);
++   nir_def *res = wg_size;
++   if (intr->intrinsic != nir_intrinsic_load_workgroup_size) {
++      nir_def *index = nir_load_local_invocation_index(b);
++      res = nir_vec3(b, nir_umod_imm(b, index, size[0]),
++                     nir_umod_imm(b, nir_udiv_imm(b, index, size[0]), size[1]),
++                     nir_udiv_imm(b, index, size[0] * size[1]));
++      if (intr->intrinsic == nir_intrinsic_load_global_invocation_id)
++         res = nir_iadd(b, nir_imul(b, nir_load_workgroup_id(b), wg_size), res);
++   }
++
++   nir_def_replace(&intr->def, nir_u2uN(b, res, intr->def.bit_size));
++   return true;
++}
++
++static bool
++dzn_nir_flatten_workgroups(nir_shader *nir)
++{
++   if (nir->info.workgroup_size_variable ||
++       (nir->info.workgroup_size[1] == 1 && nir->info.workgroup_size[2] == 1) ||
++       nir_shader_instructions_pass(nir, uses_images, nir_metadata_all, NULL))
++      return false;
++
++   uint16_t size[3] = {
++      nir->info.workgroup_size[0], nir->info.workgroup_size[1], nir->info.workgroup_size[2],
++   };
++   nir_shader_intrinsics_pass(nir, flatten_workgroup_ids, nir_metadata_control_flow, size);
++   nir->info.workgroup_size[0] = size[0] * size[1] * size[2];
++   nir->info.workgroup_size[1] = 1;
++   nir->info.workgroup_size[2] = 1;
++   return true;
++}
++
+ static VkResult
+ dzn_pipeline_get_nir_shader(struct dzn_device *device,
+                             const struct dzn_pipeline_layout *layout,
+@@ -461,6 +516,9 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
+    if (device->storage_image_int_views)
+       NIR_PASS(_, *nir, dzn_nir_lower_storage_image_int_access);
+ 
++   if (pdev->flatten_workgroups && stage == MESA_SHADER_COMPUTE)
++      NIR_PASS(_, *nir, dzn_nir_flatten_workgroups);
++
+    if (stage == MESA_SHADER_VERTEX) {
+       bool needs_conv = false;
+       for (uint32_t i = 0; i < MAX_VERTEX_GENERIC_ATTRIBS; i++) {
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 569f066..27ff614 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -176,6 +176,7 @@ struct dzn_physical_device {
+    bool emulate_astc;
+    bool storage_image_int_views;
+    bool storage_buffer_byte_views;
++   bool flatten_workgroups;
+ 
+    uint32_t queue_family_count;
+    struct dzn_queue_family {
+@@ -1565,6 +1566,7 @@ enum dzn_debug_flags {
+    DZN_DEBUG_NO_DISCARD = 1 << 19,
+    DZN_DEBUG_NO_INT_VIEWS = 1 << 20,
+    DZN_DEBUG_NO_BYTE_VIEWS = 1 << 21,
++   DZN_DEBUG_NO_FLATTEN_WORKGROUPS = 1 << 22,
+ };
+ 
+ /* Whether host-visible memory and upload buffers use write-back CPU pages.
