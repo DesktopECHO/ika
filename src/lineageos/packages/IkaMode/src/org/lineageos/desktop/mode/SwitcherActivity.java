@@ -8,6 +8,10 @@ import android.content.pm.PackageManager;
 import android.content.res.TypedArray;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.LayoutInflater;
@@ -27,8 +31,9 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Desktop/TV: the desktop's launcher (Trebuchet) under a Desktop mode heading, then each TV
- * launcher, Catapult first, under a TV mode heading. In TV mode, a TV launcher becomes the Home
+ * Desktop/TV: the GPU's renderer beside and under the title, then the desktop's launcher
+ * (Trebuchet) under a Desktop mode heading, then each TV launcher, Catapult first, under a TV
+ * mode heading. In TV mode, a TV launcher becomes the Home
  * app and comes up at once, and the desktop's launcher asks to restart in the desktop. On the
  * desktop, a TV launcher asks to restart in TV mode, with it as the Home app.
  */
@@ -73,7 +78,7 @@ public class SwitcherActivity extends Activity {
         // The rows are inflated with the dialog's themed context, not the activity's, so that
         // their text colors match the dialog's background in either theme.
         RowAdapter adapter = new RowAdapter(builder.getContext(), labels);
-        builder.setTitle(R.string.switcher_title)
+        AlertDialog list = builder.setTitle(R.string.switcher_title)
                 .setIcon(R.drawable.ic_ika)
                 .setSingleChoiceItems(adapter, checked, (dialog, which) -> {
                     if (mAsking) {
@@ -107,7 +112,63 @@ public class SwitcherActivity extends Activity {
                         finish();
                     }
                 })
-                .show();
+                .create();
+        // The list shows once the renderer's name is known, at its full size from the start:
+        // the restart question and the window after it take that size.
+        Renderer.read(this, renderer -> {
+            if (isFinishing() || isDestroyed()) {
+                return;
+            }
+            list.create();
+            if (renderer != null) {
+                showRenderer(list, renderer);
+            }
+            list.show();
+        });
+    }
+
+    /**
+     * Puts the first part of the renderer's name after the title, behind a dot and in the
+     * secondary colour, on the title's one line, cut short with an ellipsis if the line is too
+     * long. What was inside the name's parentheses goes on a line of its own below, in smaller
+     * text, lined up with the title. The title is a plain text view in place of the dialog's
+     * own, which would make the line two in smaller text instead of cutting it short.
+     */
+    private static void showRenderer(AlertDialog list, String renderer) {
+        String[] name = Renderer.split(renderer);
+        Context context = list.getContext();
+        int secondary = themeColor(context, android.R.attr.textColorSecondary);
+        TextView title = list.findViewById(com.android.internal.R.id.alertTitle);
+        ViewGroup row = list.findViewById(com.android.internal.R.id.title_template);
+        TextView line = new TextView(context);
+        line.setTextSize(TypedValue.COMPLEX_UNIT_PX, title.getTextSize());
+        line.setTypeface(title.getTypeface());
+        line.setTextColor(title.getTextColors());
+        line.setTextAlignment(title.getTextAlignment());
+        line.setSingleLine(true);
+        line.setEllipsize(TextUtils.TruncateAt.END);
+        SpannableStringBuilder text = new SpannableStringBuilder(title.getText());
+        int start = text.length();
+        text.append(" \u00b7 ").append(name[0]);
+        text.setSpan(new ForegroundColorSpan(secondary), start, text.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        line.setText(text);
+        row.addView(line, row.indexOfChild(title), new LinearLayout.LayoutParams(
+                (LinearLayout.LayoutParams) title.getLayoutParams()));
+        title.setVisibility(View.GONE);
+        if (name[1] == null) {
+            return;
+        }
+        TextView detail = new TextView(context);
+        detail.setTextAppearance(android.R.style.TextAppearance_Material_Body1);
+        detail.setTextColor(secondary);
+        detail.setText(name[1]);
+        ViewGroup.MarginLayoutParams icon = (ViewGroup.MarginLayoutParams) list.findViewById(
+                com.android.internal.R.id.icon).getLayoutParams();
+        detail.setPaddingRelative(row.getPaddingStart() + icon.width + icon.getMarginEnd(), 0,
+                row.getPaddingEnd(), 0);
+        ViewGroup top = list.findViewById(com.android.internal.R.id.topPanel);
+        top.addView(detail, top.indexOfChild(row) + 1);
     }
 
     /**
@@ -197,6 +258,15 @@ public class SwitcherActivity extends Activity {
         coverList(restarting, list);
         restarting.show();
         return restarting;
+    }
+
+    private static int themeColor(Context context, int attr) {
+        TypedArray a = context.obtainStyledAttributes(new int[] {attr});
+        try {
+            return a.getColor(0, 0);
+        } finally {
+            a.recycle();
+        }
     }
 
     private static void setTextSize(TextView view, float sp) {
@@ -339,7 +409,7 @@ public class SwitcherActivity extends Activity {
             }
             TextView title = new TextView(mContext);
             title.setTextAppearance(android.R.style.TextAppearance_Material_Body2);
-            title.setTextColor(themeColor(android.R.attr.colorAccent));
+            title.setTextColor(themeColor(mContext, android.R.attr.colorAccent));
             title.setText(mLabels.get(position));
             int padding = themeSize(android.R.attr.dialogPreferredPadding,
                     Math.round(24 * density));
@@ -354,15 +424,6 @@ public class SwitcherActivity extends Activity {
             TypedArray a = mContext.obtainStyledAttributes(new int[] {attr});
             try {
                 return a.getDrawable(0);
-            } finally {
-                a.recycle();
-            }
-        }
-
-        private int themeColor(int attr) {
-            TypedArray a = mContext.obtainStyledAttributes(new int[] {attr});
-            try {
-                return a.getColor(0, 0);
             } finally {
                 a.recycle();
             }

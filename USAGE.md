@@ -407,9 +407,13 @@ keys it does not know.
 Android has a TV interface as well as the desktop one. **Desktop/TV** changes
 the mode: open it from the desktop's **Android Apps (Ika)** menu, where it
 opens in a window of its own, from Android's app drawer in desktop mode, or
-from the TV launcher's apps in TV mode. It lists **Trebuchet**, the desktop's
-launcher, under **Desktop mode**, and each TV launcher installed under **TV
-mode**, **Catapult** (LineageOS's TV launcher) first:
+from the TV launcher's apps in TV mode. Its title also names the graphics
+renderer Android's apps get, as OpenGL ES reports it, for example
+**Desktop/TV Mode · ANGLE**, with what the name has in parentheses on a smaller
+line below, such as the host GPU and its Vulkan driver. It lists
+**Trebuchet**, the desktop's launcher, under **Desktop mode**, and each TV
+launcher installed under **TV mode**, **Catapult** (LineageOS's TV launcher)
+first:
 
 - In TV mode, choosing another TV launcher makes it the Home app and opens it
   at once.
