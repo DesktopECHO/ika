@@ -1,0 +1,138 @@
+diff --git a/src/rutabaga_core.rs b/src/rutabaga_core.rs
+--- a/src/rutabaga_core.rs
++++ b/src/rutabaga_core.rs
+@@ -58,6 +58,7 @@ use crate::rutabaga_utils::RUTABAGA_CONTEXT_INIT_CAPSET_ID_MASK;
+ #[cfg(fence_passing_option1)]
+ use crate::rutabaga_utils::RUTABAGA_FLAG_FENCE_HOST_SHAREABLE;
+ use crate::rutabaga_utils::RUTABAGA_FLAG_INFO_RING_IDX;
++use crate::rutabaga_utils::RUTABAGA_PIPE_TEXTURE_2D;
+ use crate::snapshot::RutabagaSnapshotReader;
+ use crate::snapshot::RutabagaSnapshotWriter;
+ #[cfg(feature = "virgl_renderer")]
+@@ -789,11 +790,38 @@ impl Rutabaga {
+             return Err(RutabagaError::InvalidResourceId);
+         }
+ 
+-        let resource = component.create_3d(resource_id, resource_create_3d)?;
++        // ika: a 2D resource the default component cannot create goes to
++        // Rutabaga2D, where the builder added it (virglrenderer without virgl).
++        let resource = match component.create_3d(resource_id, resource_create_3d) {
++            Ok(resource) => resource,
++            Err(e) => match self.components.get_mut(&RutabagaComponentType::Rutabaga2D) {
++                Some(rutabaga_2d)
++                    if self.default_component != RutabagaComponentType::Rutabaga2D
++                        && resource_create_3d.target == RUTABAGA_PIPE_TEXTURE_2D =>
++                {
++                    rutabaga_2d.create_3d(resource_id, resource_create_3d)?
++                }
++                _ => return Err(e),
++            },
++        };
+         self.resources.insert(resource_id, resource);
+         Ok(())
+     }
+ 
++    // ika: the component that holds a resource: Rutabaga2D for one that
++    // resource_create_3d gave it, else the default component.
++    fn resource_component_type(&self, resource_id: u32) -> RutabagaComponentType {
++        match self.resources.get(&resource_id) {
++            Some(resource)
++                if resource.component_mask
++                    == 1 << (RutabagaComponentType::Rutabaga2D as u8) =>
++            {
++                RutabagaComponentType::Rutabaga2D
++            }
++            _ => self.default_component,
++        }
++    }
++
+     /// Creates and imports to a resource with the external `import_handle` and the `import_data`
+     /// metadata.
+     pub fn resource_import(
+@@ -827,9 +855,10 @@ impl Rutabaga {
+         resource_id: u32,
+         mut vecs: Vec<RutabagaIovec>,
+     ) -> RutabagaResult<()> {
++        let component_type = self.resource_component_type(resource_id);
+         let component = self
+             .components
+-            .get_mut(&self.default_component)
++            .get_mut(&component_type)
+             .ok_or(RutabagaError::InvalidComponent)?;
+ 
+         let resource = self
+@@ -844,9 +873,10 @@ impl Rutabaga {
+ 
+     /// Detaches any previously attached iovecs from the resource.
+     pub fn detach_backing(&mut self, resource_id: u32) -> RutabagaResult<()> {
++        let component_type = self.resource_component_type(resource_id);
+         let component = self
+             .components
+-            .get_mut(&self.default_component)
++            .get_mut(&component_type)
+             .ok_or(RutabagaError::InvalidComponent)?;
+ 
+         let resource = self
+@@ -861,9 +891,10 @@ impl Rutabaga {
+ 
+     /// Releases guest kernel reference on the resource.
+     pub fn unref_resource(&mut self, resource_id: u32) -> RutabagaResult<()> {
++        let component_type = self.resource_component_type(resource_id);
+         let component = self
+             .components
+-            .get_mut(&self.default_component)
++            .get_mut(&component_type)
+             .ok_or(RutabagaError::InvalidComponent)?;
+ 
+         let resource = self
+@@ -909,6 +940,9 @@ impl Rutabaga {
+             && resource.component_mask & (1 << (RutabagaComponentType::CrossDomain as u8)) != 0
+         {
+             RutabagaComponentType::CrossDomain
++        } else if resource.component_mask == 1 << (RutabagaComponentType::Rutabaga2D as u8) {
++            // ika: see resource_component_type.
++            RutabagaComponentType::Rutabaga2D
+         } else {
+             self.default_component
+         };
+@@ -947,6 +981,9 @@ impl Rutabaga {
+             && resource.component_mask & (1 << (RutabagaComponentType::CrossDomain as u8)) != 0
+         {
+             RutabagaComponentType::CrossDomain
++        } else if resource.component_mask == 1 << (RutabagaComponentType::Rutabaga2D as u8) {
++            // ika: see resource_component_type.
++            RutabagaComponentType::Rutabaga2D
+         } else {
+             self.default_component
+         };
+@@ -959,9 +996,10 @@ impl Rutabaga {
+     }
+ 
+     pub fn resource_flush(&mut self, resource_id: u32) -> RutabagaResult<()> {
++        let component_type = self.resource_component_type(resource_id);
+         let component = self
+             .components
+-            .get(&self.default_component)
++            .get(&component_type)
+             .ok_or(MagmaGpuError::Unsupported)?;
+ 
+         let resource = self
+@@ -1594,6 +1632,18 @@ impl RutabagaBuilder {
+                 ) {
+                     rutabaga_components.insert(RutabagaComponentType::VirglRenderer, virgl);
+ 
++                    // ika: with only Venus or drm native contexts,
++                    // virglrenderer has no OpenGL renderer for the classic 2D
++                    // resources the guest kernel makes for dumb buffers, such
++                    // as the composer's first modeset buffer, so Rutabaga2D
++                    // keeps those in host memory.
++                    if self.capset_mask != 0 && !capset_enabled(RUTABAGA_CAPSET_VIRGL2) {
++                        rutabaga_components.insert(
++                            RutabagaComponentType::Rutabaga2D,
++                            Rutabaga2D::init(self.fence_handler.clone())?,
++                        );
++                    }
++
+                     push_capset(RUTABAGA_CAPSET_VIRGL);
+                     push_capset(RUTABAGA_CAPSET_VIRGL2);
+                     push_capset(RUTABAGA_CAPSET_VENUS);

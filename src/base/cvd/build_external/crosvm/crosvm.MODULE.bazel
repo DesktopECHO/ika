@@ -299,6 +299,11 @@ crosvm_bin.annotation(
         # them to virglrenderer with their Vulkan info, and reads them back
         # for the display.
         "@//build_external/crosvm:PATCH.rutabaga_gfx-wsl-optimal-images.patch",
+        # Without virgl, keep the guest kernel's classic 2D resources (dumb
+        # buffers, such as the composer's first modeset buffer) in Rutabaga2D,
+        # which virglrenderer could not create. Its name sorts after the
+        # patches above, whose code it changes ('_' after '-').
+        "@//build_external/crosvm:PATCH.rutabaga_gfx_virgl-2d-resources.patch",
     ],
     repositories = ["crosvm_bin"],
 )
