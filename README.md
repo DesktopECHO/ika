@@ -87,4 +87,4 @@ TV mode and the everyday commands.
 | [src/scrcpy/IKA.md](src/scrcpy/IKA.md) | Ika's changes to scrcpy, the console's client |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
-<img width="1920" height="1080" alt="Ika screenshot" src="https://github.com/user-attachments/assets/c63c8d08-d11b-4ec0-956a-d2c0220b963a" />
+<img width="45%" alt="Ika screenshot" src="https://github.com/user-attachments/assets/c63c8d08-d11b-4ec0-956a-d2c0220b963a" />&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<img width="45%" alt="Ika in TV mode" src="src/docs/ika-tv-mode.png" />
