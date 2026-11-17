@@ -583,6 +583,11 @@ partway through Geekbench's GPU test and through Steel Nomad Light. On Linux,
 
 ### Limits on WSL2
 
+- When an app makes Windows reset the GPU, that app ends. If the reset also
+  took crosvm's own device, which keeps the display (gfxstream's, or in
+  Venus mode the one that allocates Android's buffers and reads its frames
+  back), crosvm exits with code 32 and Android restarts, with "VkDevice was
+  lost" or "crosvm's Vulkan device was lost" in crosvm's log.
 - Each D3D12 device has a 4 GB window for shader-visible descriptor heaps,
   shared by every Android app.
 - The GPU device runs in crosvm's second process, the one that maps

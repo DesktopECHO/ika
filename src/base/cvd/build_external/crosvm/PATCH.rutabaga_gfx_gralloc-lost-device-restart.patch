@@ -1,0 +1,108 @@
+diff --git a/src/rutabaga_gralloc/gralloc.rs b/src/rutabaga_gralloc/gralloc.rs
+--- a/src/rutabaga_gralloc/gralloc.rs
++++ b/src/rutabaga_gralloc/gralloc.rs
+@@ -277,6 +277,10 @@ pub trait Gralloc: Send {
+ 
+     /// ika: drops what `read_image` and `write_image` kept for `id`.
+     fn forget_image(&mut self, _id: u32) {}
++
++    /// ika: after `what` failed, ends crosvm (code 32, which restarts the VM)
++    /// if the implementation's own device is lost.
++    fn exit_if_device_lost(&self, _what: &str) {}
+ }
+ 
+ /// Enumeration of possible allocation backends.
+@@ -405,7 +409,9 @@ impl RutabagaGralloc {
+             .get_mut(&backend)
+             .ok_or(RutabagaError::InvalidGrallocBackend)?;
+ 
+-        let mut reqs = gralloc.get_image_memory_requirements(info)?;
++        let mut reqs = gralloc.get_image_memory_requirements(info).inspect_err(|_| {
++            gralloc.exit_if_device_lost("image memory requirements");
++        })?;
+         reqs.size = round_up_to_page_size(reqs.size)?;
+         Ok(reqs)
+     }
+@@ -422,7 +428,9 @@ impl RutabagaGralloc {
+             .get_mut(&backend)
+             .ok_or(RutabagaError::InvalidGrallocBackend)?;
+ 
+-        gralloc.allocate_memory(reqs)
++        gralloc.allocate_memory(reqs).inspect_err(|_| {
++            gralloc.exit_if_device_lost("allocation");
++        })
+     }
+ 
+     /// Imports the `handle` using the given `vulkan_info`.  Returns a mapping using Vulkano upon
+diff --git a/src/rutabaga_gralloc/vulkano_gralloc.rs b/src/rutabaga_gralloc/vulkano_gralloc.rs
+--- a/src/rutabaga_gralloc/vulkano_gralloc.rs
++++ b/src/rutabaga_gralloc/vulkano_gralloc.rs
+@@ -81,6 +81,7 @@ use vulkano::sync::Sharing;
+ use vulkano::LoadingError;
+ use vulkano::VulkanError;
+ use vulkano::VulkanLibrary;
++use vulkano::VulkanObject;
+ 
+ use crate::rutabaga_gralloc::formats::canonical_image_requirements;
+ use crate::rutabaga_gralloc::gralloc::Gralloc;
+@@ -148,15 +149,45 @@ fn submit_and_wait(
+     };
+     if let Err(e) = submitted {
+         *device_lost |= matches!(e, VulkanError::DeviceLost);
++        if *device_lost {
++            exit_for_lost_device(what);
++        }
+         return Err(error("submit", &e));
+     }
+     if let Err(e) = fence.wait(None) {
+         *device_lost |= matches!(e, FenceError::DeviceLost);
++        if *device_lost {
++            exit_for_lost_device(what);
++        }
+         return Err(error("wait", &e));
+     }
+     Ok(())
+ }
+ 
++// ika: crosvm's own Vulkan device is lost (a GPU reset; under WSL2 a removed
++// D3D12 device). Android's buffers and the display's readbacks go through it,
++// so neither works again in this process. Exit with the code crosvm uses for
++// a guest reboot, so that the VM manager restarts the VM, as gfxstream does
++// when its own device is lost.
++fn exit_for_lost_device(what: &str) -> ! {
++    log::error!(
++        "crosvm's Vulkan device was lost ({}); exiting with code 32 so that the VM restarts",
++        what
++    );
++    // SAFETY: _exit ends the process at once, as gfxstream's does.
++    unsafe { libc::_exit(32) }
++}
++
++// ika: whether `device` is lost, asked with vkDeviceWaitIdle, which reports
++// a lost device (Dozen reports a removed D3D12 device). vulkano's wait_idle
++// panics on that error.
++fn device_is_lost(device: &Device) -> bool {
++    // SAFETY: the device is valid, and crosvm's GPU thread is the only one
++    // that records work on it.
++    let result = unsafe { (device.fns().v1_0.device_wait_idle)(device.handle()) };
++    matches!(result.result().map_err(VulkanError::from), Err(VulkanError::DeviceLost))
++}
++
+ // ika: an optimal image some other device rendered into, imported for
+ // copies to the CPU. Its layout is GENERAL whenever it changes hands, which
+ // Dozen gives the D3D12 state COMMON that resources shared between devices
+@@ -1051,6 +1082,14 @@ impl Gralloc for VulkanoGralloc {
+         Ok(())
+     }
+ 
++    fn exit_if_device_lost(&self, what: &str) {
++        for device in self.devices.values() {
++            if device_is_lost(device) {
++                exit_for_lost_device(what);
++            }
++        }
++    }
++
+     fn forget_image(&mut self, id: u32) {
+         self.readbacks.remove(&id);
+     }

@@ -304,6 +304,12 @@ crosvm_bin.annotation(
         # which virglrenderer could not create. Its name sorts after the
         # patches above, whose code it changes ('_' after '-').
         "@//build_external/crosvm:PATCH.rutabaga_gfx_virgl-2d-resources.patch",
+        # When crosvm's own Vulkan device (Vulkano gralloc's: Android's
+        # buffers in Venus mode, and the display's readbacks under WSL2) is
+        # lost, exit with code 32 so that the VM restarts, as gfxstream does
+        # when its own device is lost. It changes code of
+        # PATCH.rutabaga_gfx-wsl-optimal-images.patch, and sorts after it.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx_gralloc-lost-device-restart.patch",
     ],
     repositories = ["crosvm_bin"],
 )

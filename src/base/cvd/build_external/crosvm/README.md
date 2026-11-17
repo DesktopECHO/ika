@@ -151,6 +151,11 @@ gfxstream Vulkan enabled and selects the udmabuf-backed renderer path.
 - **What it does:** When virglrenderer runs without virgl (context types `venus` or `drm` only, as in `--gpu_mode=venus` and `honeykrisp`), the builder also starts the `Rutabaga2D` component. A classic 2D resource (`RESOURCE_CREATE_2D`, target `PIPE_TEXTURE_2D`) that virglrenderer refuses is created there, in host memory, and its backing, transfers, flushes and release go to `Rutabaga2D` too.
 - **Why:** Without its OpenGL renderer virglrenderer creates no 2D resources, yet the guest kernel makes one for every dumb buffer, such as the composer's first modeset buffer. Each boot logged `ResourceCreate2d: ErrRutabaga(ComponentError(-22))` and the failures of every command on those resources after it (attach, transfer, `SET_SCANOUT`, flush), and the guest kernel ten `virtio_gpu_dequeue_ctrl_func` errors.
 
+#### `PATCH.rutabaga_gfx_gralloc-lost-device-restart.patch`
+- **Targets:** `rutabaga_gfx` crate. Files: `src/rutabaga_gralloc/gralloc.rs`, `src/rutabaga_gralloc/vulkano_gralloc.rs`. Applied after `PATCH.rutabaga_gfx-wsl-optimal-images.patch`, whose readback code it changes.
+- **What it does:** When the Vulkano gralloc's own device is lost, crosvm exits with code 32, the code of a guest reboot, so that the VM manager restarts the VM: when a readback or upload finds the device lost, and when an allocation fails and `vkDeviceWaitIdle` then reports the device lost (vulkano's `wait_idle` panics on that error, so the patch calls the function itself).
+- **Why:** In `--gpu_mode=venus` this device allocates Android's buffers, and under WSL2 reads its frames back for the display. Once a GPU reset took it (a removed D3D12 device), the readbacks stopped for good and the display froze, or every new buffer failed and SurfaceFlinger, System UI and Settings aborted over and over until the VM was restarted by hand. gfxstream does the same when its own device is lost (`PATCH.gfxstream.survive-guest-device-loss.patch`).
+
 #### `PATCH.crosvm-display-dmabuf-only.patch`, `PATCH.crosvm-display-dmabuf-only-devices.patch`
 - **Targets:** `crosvm` and `devices` crates. File: `devices/src/virtio/gpu/virtio_gpu.rs`.
 - **What it does:** Only a scanout backed by a dma-buf goes to the compositor; any other handle, such as the opaque fd of an optimal image under WSL2, is read back instead. The `-devices` patch is the same change with the path layout of `devices` as a published crate.
@@ -204,7 +209,7 @@ See `crosvm.MODULE.bazel`. The relevant blocks:
 | `crosvm_bin.annotation(crate = "jail")` | `jail-aarch64-block-pread64`, `jail-gpu-host-graphics-libs-optional` |
 | `crosvm_bin.annotation(crate = "devices")` | `crosvm-media-decoder-input-size`, `crosvm-media-decoder-visible-size`, `crosvm-media-errors`, `crosvm-media-direct-decode`, `crosvm-media-last-buffer`, `crosvm-media-placeholder-size`, `crosvm-resize-display-devices`, `crosvm-flush-held-dmabuf-devices`, `crosvm-display-dmabuf-only-devices` |
 | `crosvm_bin.annotation(crate = "virtio-media")` | `virtio-media-mmap-offset-step` |
-| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info`, `rutabaga_gfx-on-demand-export-and-query`, `rutabaga_gfx-wsl-optimal-images`, `rutabaga_gfx_virgl-2d-resources` |
+| `crosvm_bin.annotation(crate = "rutabaga_gfx")` | `rutabaga_gfx_build_rs`, `rutabaga_gfx-gralloc-vulkano-fallback`, `rutabaga_gfx-cleanup-on-drop`, `rutabaga_gfx-gfxstream-3d-resource-info`, `rutabaga_gfx-on-demand-export-and-query`, `rutabaga_gfx-wsl-optimal-images`, `rutabaga_gfx_virgl-2d-resources`, `rutabaga_gfx_gralloc-lost-device-restart` |
 | `crosvm_bin.annotation(crate = "minijail-sys")` | `minijail-sys_build_rs` |
 | `crosvm_bin.annotation(crate = "proto_build_tools")` | `proto_build_tools` |
 | `crosvm_bin.annotation(crate = "vm_control")` | `crosvm-resize-display-vm-control` |
