@@ -1,0 +1,5 @@
+# The guest's Vulkan driver stats every node in /dev/dri as it looks for the
+# GPU, the primary node card0 included, then opens renderD128, which apps and
+# system_server may use. card0 is graphics_device, which they may not touch,
+# so each process that starts the driver logged a denial for nothing.
+dontaudit { appdomain system_server } graphics_device:chr_file getattr;
