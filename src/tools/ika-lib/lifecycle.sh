@@ -136,7 +136,8 @@ remove_unreadable_cvd_config() {
   done
 }
 
-START_LOCK_FD=""
+START_LOCK_PID=""
+START_LOCK_HOLDER=""
 
 # Lets one start at a time launch the VM, until it has booted or failed. Two
 # starts at once (a script and a menu launcher, say) both found no VM and
@@ -144,24 +145,41 @@ START_LOCK_FD=""
 # before the first one's run_cvd read it, and systemd removed that scope when
 # the second cvd found the group running, so run_cvd failed on a cgroup that
 # was gone. A start that waits here finds the VM running and opens its console.
+#
+# flock holds the lock in a process of its own, so nothing the start launches,
+# such as adb's server, inherits it and keeps it after the start. Its command,
+# tail, ends with the start's process, so a start that is killed lets go too.
 take_start_lock() {
+  local lock="${CVD_TMP_DIR}/start.lock"
+  local owner="${BASHPID}"
+  local ready
+
   mkdir -p "${CVD_TMP_DIR}"
-  exec {START_LOCK_FD}>"${CVD_TMP_DIR}/start.lock"
-  if ! flock -n "${START_LOCK_FD}"; then
-    log "waiting for another start of Android to finish"
-    flock -w "$((CVD_BOOT_MAX_SEC + 60))" "${START_LOCK_FD}" \
-      || die "timed out waiting for another start of Android to finish"
+  flock -n "${lock}" true || log "waiting for another start of Android to finish"
+  ready="$(mktemp "${CVD_TMP_DIR}/start.lock.XXXXXX")"
+  flock -o -w "$((CVD_BOOT_MAX_SEC + 60))" "${lock}" \
+    sh -c 'echo "$$" >"$1" && exec tail --pid="$2" -f /dev/null' sh "${ready}" "${owner}" \
+    </dev/null >/dev/null 2>&1 3>&- &
+  START_LOCK_PID="$!"
+  until [[ -s "${ready}" ]] || ! kill -0 "${START_LOCK_PID}" 2>/dev/null; do
+    sleep 0.05
+  done
+  START_LOCK_HOLDER="$(cat "${ready}")"
+  rm -f "${ready}"
+  if [[ -z "${START_LOCK_HOLDER}" ]]; then
+    START_LOCK_PID=""
+    die "timed out waiting for another start of Android to finish"
   fi
   trap release_start_lock EXIT
 }
 
-# Unlocks before closing: processes the start leaves running, such as adb's
-# server, hold copies of the lock's descriptor.
+# Ends tail, and waits for flock to exit with it, which frees the lock.
 release_start_lock() {
-  [[ -n "${START_LOCK_FD}" ]] || return 0
-  flock -u "${START_LOCK_FD}"
-  exec {START_LOCK_FD}>&-
-  START_LOCK_FD=""
+  [[ -n "${START_LOCK_PID}" ]] || return 0
+  kill "${START_LOCK_HOLDER}" 2>/dev/null || true
+  wait "${START_LOCK_PID}" 2>/dev/null || true
+  START_LOCK_PID=""
+  START_LOCK_HOLDER=""
   trap - EXIT
 }
 
@@ -256,9 +274,7 @@ start_cvd() {
   vm_unit="ika-android-$(date +%s)"
   (
     cd "${CVD_PRODUCT_OUT}"
-    # The VM outlives this start, which unlocks the lock on its way out but
-    # cannot if it is killed.
-    exec 3>&- {START_LOCK_FD}>&-
+    exec 3>&-
     # systemd-run --scope runs the command in this process: launcher_pid stays
     # the launcher's.
     exec "${own_session[@]+"${own_session[@]}"}" systemd-run --user --scope --quiet --collect -p Delegate=yes \

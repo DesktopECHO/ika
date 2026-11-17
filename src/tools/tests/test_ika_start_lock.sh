@@ -7,7 +7,8 @@
 # itself to the cgroup and the start failed. A start now holds a lock from its
 # check for a running VM until the VM has booted or failed; another start waits
 # for it, then finds the VM running. The lock is released however the start
-# ends, even while processes it left running hold its descriptor.
+# ends, even when it is killed, and processes it left running, such as adb's
+# server, never hold it.
 
 set -euo pipefail
 
@@ -50,8 +51,8 @@ mount_android_storage() { :; }
 start_app_menu_watcher() { :; }
 
 # The VM runs. The check for it runs under the lock and leaves a process
-# behind that holds the lock's descriptor, as adb's server does; the lock is
-# free when the console opens and after the start.
+# behind, as adb's server does; the lock is free when the console opens and
+# after the start.
 has_live_cvd_processes() {
   lock_is_free && echo "checked for a running VM without the lock"
   sleep 30 >/dev/null 2>&1 &
@@ -61,7 +62,7 @@ has_live_cvd_processes() {
 ( START_CONSOLE=true start_cvd false ) >"${LOG}" 2>&1 3>&1 \
   || fail "start with the VM running failed: $(cat "${LOG}")"
 CHILD_PID="$(cat "${TEST_ROOT}/child")"
-kill -0 "${CHILD_PID}" || fail "the process holding the lock's descriptor did not stay"
+kill -0 "${CHILD_PID}" || fail "the process the start left did not stay"
 ! grep -q "without the lock\|under the lock" "${LOG}" || fail "$(cat "${LOG}")"
 lock_is_free || fail "the lock stayed held after the start"
 grep -q "Android virtual device running" "${LOG}" || fail "no running VM reported: $(cat "${LOG}")"
@@ -83,13 +84,36 @@ grep -qF "Cuttlefish is already running" "${LOG}" \
 lock_is_free || fail "the lock stayed held after the waiting start"
 
 # A start that fails after taking the lock releases it on exit, although a
-# process it left holds the descriptor.
+# process it left is still running.
 ( take_start_lock
   sleep 30 >/dev/null 2>&1 &
   echo "$!" >"${TEST_ROOT}/child"
   die "the VM did not boot" ) >"${LOG}" 2>&1 3>&1 && fail "die did not fail"
 CHILD_PID="$(cat "${TEST_ROOT}/child")"
-kill -0 "${CHILD_PID}" || fail "the process holding the lock's descriptor did not stay"
+kill -0 "${CHILD_PID}" || fail "the process the start left did not stay"
 lock_is_free || fail "the lock stayed held after a failed start"
+kill "${CHILD_PID}"
+CHILD_PID=""
+
+# A start killed while it holds the lock, so that it cannot release it, lets
+# go of it too, although a process it left is still running.
+rm -f "${TEST_ROOT}/took"
+( take_start_lock
+  sleep 30 >/dev/null 2>&1 &
+  echo "$!" >"${TEST_ROOT}/child"
+  touch "${TEST_ROOT}/took"
+  while :; do sleep 0.1; done ) >"${LOG}" 2>&1 3>&1 &
+STARTED="$!"
+until [[ -e "${TEST_ROOT}/took" ]]; do sleep 0.05; done
+CHILD_PID="$(cat "${TEST_ROOT}/child")"
+! lock_is_free || fail "the start did not hold the lock"
+kill -KILL "${STARTED}"
+wait "${STARTED}" 2>/dev/null || true
+for _ in $(seq 50); do
+  ! lock_is_free || break
+  sleep 0.1
+done
+kill -0 "${CHILD_PID}" || fail "the process the start left did not stay"
+lock_is_free || fail "the lock stayed held after the start was killed"
 
 printf 'PASS: one start at a time launches the VM, and the lock is released however it ends\n'
