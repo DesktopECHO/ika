@@ -75,7 +75,7 @@ static void dump(ID3D12Device *device, HRESULT reason) {
       UINT32 from = done > 4 ? done - 4 : 0;
       UINT32 to = done + 4 < node->BreadcrumbCount ? done + 4 : node->BreadcrumbCount;
       for (UINT32 i = from; i < to && len < (int)sizeof(ops) - 16; i++)
-        len += snprintf(ops + len, sizeof(ops) - len, "%s%d%s", i == done ? "[" : "",
+        len += snprintf(ops + len, sizeof(ops) - len, " %s%d%s", i == done ? "[" : "",
                         (int)node->pCommandHistory[i], i == done ? "]" : "");
       report("unfinished command list %p queue %p: %u/%u ops done; ops %u..%u (current in []): %s",
              (void *)node->pCommandList, (void *)node->pCommandQueue, done, node->BreadcrumbCount, from,
