@@ -29,6 +29,9 @@
  * first request, before any app runs, and keeps them idle in the pool
  * (IKA_D3D12_NO_PROBE=1 turns that off). A device no instance uses that has
  * gone over the churn limit is released.
+ * A device the GPU removed (a reset, or a fault in the work of an app that used
+ * it) is left out of the pool, so that the apps that come after get a working
+ * device; the apps on it end with it, as they would without the shim.
  * Devices are only created for instances running at the same time and after a
  * heavy app, so far fewer than the ~100 WSL allows. IKA_D3D12_SHIM_DEBUG=1 logs
  * each decision. All other exports are forwarded to the real library.
@@ -130,6 +133,8 @@ static struct pooled_device {
   void *device;
   /* Resources, heaps and descriptor heaps created on this device. */
   volatile uint64_t churn;
+  /* Removed by the GPU, and kept only for IKA_D3D12_DRED=1 (see drop_removed). */
+  int removed;
 } pool[MAX_POOLED];
 static int pool_count;
 /* Adapters on which CreateDevice failed, and how many of their devices were
@@ -289,6 +294,37 @@ static void release_spent(uint64_t churn_limit, int debug) {
   }
 }
 
+/* ID3D12Device::GetDeviceRemovedReason, vtable slot 37: S_OK until the device
+ * is removed. */
+enum { SLOT_GET_DEVICE_REMOVED_REASON = 37 };
+static int32_t removed_reason(void *device) {
+  return ((int32_t (*)(void *))(*(void ***)device)[SLOT_GET_DEVICE_REMOVED_REASON])(device);
+}
+
+/* Takes the devices the GPU removed out of the pool. A removed device stays
+ * removed: handed to a new instance, reused or shared, it failed that app at
+ * once, and on a driver that gives one device per process every app after it,
+ * until the VM restarted. The apps still on it keep their references. With
+ * IKA_D3D12_DRED=1, whose threads keep polling every device, it stays in the
+ * pool, marked and unused. */
+static void drop_removed(void) {
+  const char *dred = getenv("IKA_D3D12_DRED");
+  for (int i = 0; i < pool_count;) {
+    int32_t reason = pool[i].removed ? 0 : removed_reason(pool[i].device);
+    if (reason != 0) {
+      fprintf(stderr, "ika d3d12 shim: device %p was removed (%#x); no instance gets it again\n", pool[i].device,
+              (unsigned)reason);
+      pool[i].removed = 1;
+      if (!(dred && dred[0] == '1')) {
+        ((uint32_t (*)(void *))(*(void ***)pool[i].device)[SLOT_RELEASE])(pool[i].device);
+        pool[i] = pool[--pool_count];
+        continue;
+      }
+    }
+    i++;
+  }
+}
+
 /* Records that the driver gives this process at most `most` devices on luid. */
 static void set_device_limit(uint64_t luid, int most) {
   int i = 0;
@@ -316,6 +352,7 @@ static void pool_add(uint64_t luid, void *device) {
   pool[pool_count].luid = luid;
   pool[pool_count].device = device;
   pool[pool_count].churn = 0;
+  pool[pool_count].removed = 0;
   pool_count++;
   hook_churn(device);
   ika_dred_watch(device);
@@ -390,6 +427,7 @@ static int32_t w_create_device(void *self, void *adapter, int32_t feature_level,
 
   pthread_mutex_lock(&factory_lock);
   release_spent(churn_limit, debug);
+  drop_removed();
 
   static uint64_t probed[4];
   static int probed_count;
@@ -405,10 +443,11 @@ static int32_t w_create_device(void *self, void *adapter, int32_t feature_level,
   void *device = NULL;
   /* A device no instance uses any more, under the churn limit. */
   for (int i = 0; i < pool_count && !device; i++)
-    if (pool[i].luid == luid && pool[i].churn < churn_limit && other_refs(pool[i].device) == 0) device = pool[i].device;
+    if (pool[i].luid == luid && !pool[i].removed && pool[i].churn < churn_limit && other_refs(pool[i].device) == 0)
+      device = pool[i].device;
   how = "reused";
   int live = 0;
-  for (int i = 0; i < pool_count; i++) live += pool[i].luid == luid;
+  for (int i = 0; i < pool_count; i++) live += pool[i].luid == luid && !pool[i].removed;
   for (int i = 0; i < device_limit_count; i++)
     if (device_limits[i].luid == luid && (uint64_t)device_limits[i].most < max_devices) max_devices = device_limits[i].most;
   if (!device && (uint64_t)live < max_devices && pool_count < MAX_POOLED) {
@@ -433,7 +472,7 @@ static int32_t w_create_device(void *self, void *adapter, int32_t feature_level,
     /* At the limit: share the live device that has created the fewest. */
     uint64_t least = UINT64_MAX;
     for (int i = 0; i < pool_count; i++)
-      if (pool[i].luid == luid && pool[i].churn < least) {
+      if (pool[i].luid == luid && !pool[i].removed && pool[i].churn < least) {
         least = pool[i].churn;
         device = pool[i].device;
       }

@@ -463,10 +463,12 @@ SSE4.1), which the processors of hosts that run Dozen have; on an x86-64 CPU
 without them, gfxstream decodes on the GPU and logs "ASTC CPU decoding is
 unavailable".
 - The `libd3d12.so` shim ([src/tools/wsl/d3d12_shim.c](src/tools/wsl/d3d12_shim.c))
-  first in `LD_LIBRARY_PATH`. It makes every Vulkan instance in crosvm share
-  one D3D12 device. WSL allows about ten D3D12 devices per process, and a
-  released device's GPU address space is not given back, so after about a
-  hundred Android apps a device per instance runs out.
+  first in `LD_LIBRARY_PATH`. It gives crosvm's Vulkan instances D3D12 devices
+  from a pool of a few, which they share. WSL allows about ten D3D12 devices
+  per process, and a released device's GPU address space is not given back,
+  so after about a hundred Android apps a device per instance runs out. A
+  device Windows removed in a GPU reset leaves the pool, so the apps that
+  come after get a working one.
 
 Ika's Dozen discards a render-target or depth-stencil texture that is placed
 in a heap as its Vulkan layout leaves `UNDEFINED`, on Windows drivers without
