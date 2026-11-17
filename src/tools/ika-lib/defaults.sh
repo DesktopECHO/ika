@@ -190,6 +190,7 @@ MADBFS_LOG_FILE="${CVD_HOME_DIR}/madbfs.log"
 # The storage watcher, which unmounts it once the VM has stopped by itself
 STORAGE_WATCHER_PID_FILE="${CVD_TMP_DIR}/storage-watcher.pid"
 STORAGE_WATCHER_LOCK_FILE="${CVD_TMP_DIR}/storage-watcher.lock"
+START_LOCK_FILE="${CVD_TMP_DIR}/start.lock"
 STORAGE_WATCHER_POLL_SEC=2
 STORAGE_REMOUNT_SEC=30
 APP_LIST_CACHE="${IKA_APPS_DIR}/app-list"

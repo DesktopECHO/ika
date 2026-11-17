@@ -628,7 +628,7 @@ ensure_guest_ready() {
   exec {autostart_lock_fd}>"${CVD_TMP_DIR}/autostart.lock"
   flock -w "$((CVD_BOOT_MAX_SEC + 60))" "${autostart_lock_fd}" \
     || die "timed out waiting for Ika to start"
-  if ! has_live_cvd_processes; then
+  if ! has_live_cvd_processes && ! android_start_in_progress; then
     log "Android virtual device not running; starting it without the console"
     notify_progress "Starting Android, one moment..."
     # Close the lock for the child: the VM processes it starts outlive this
@@ -645,7 +645,8 @@ ensure_guest_ready() {
   fi
   deadline="$(make_deadline "${CVD_BOOT_MAX_SEC}")"
   until adb_boot_completed "${adb_serial}"; do
-    has_live_cvd_processes || die "the Android virtual device stopped while booting"
+    has_live_cvd_processes || android_start_in_progress \
+      || die "the Android virtual device stopped while booting"
     within_deadline "${deadline}" || die "the Android virtual device did not finish booting"
     sleep 1
   done

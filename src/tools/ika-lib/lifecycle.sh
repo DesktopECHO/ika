@@ -139,25 +139,24 @@ remove_unreadable_cvd_config() {
 START_LOCK_PID=""
 START_LOCK_HOLDER=""
 
-# Lets one start at a time launch the VM, until it has booted or failed. Two
-# starts at once (a script and a menu launcher, say) both found no VM and
-# launched it: the second wrote its own scope's cgroup into vcpu-config.json
-# before the first one's run_cvd read it, and systemd removed that scope when
-# the second cvd found the group running, so run_cvd failed on a cgroup that
-# was gone. A start that waits here finds the VM running and opens its console.
+# Lets one start at a time launch the VM, until it has booted or failed: a
+# start that finds the lock taken returns 1, and says that a start is in
+# progress. Two starts at once (a script and a menu launcher, say) both found
+# no VM and launched it: the second wrote its own scope's cgroup into
+# vcpu-config.json before the first one's run_cvd read it, and systemd removed
+# that scope when the second cvd found the group running, so run_cvd failed on
+# a cgroup that was gone.
 #
 # flock holds the lock in a process of its own, so nothing the start launches,
 # such as adb's server, inherits it and keeps it after the start. Its command,
 # tail, ends with the start's process, so a start that is killed lets go too.
 take_start_lock() {
-  local lock="${CVD_TMP_DIR}/start.lock"
   local owner="${BASHPID}"
   local ready
 
   mkdir -p "${CVD_TMP_DIR}"
-  flock -n "${lock}" true || log "waiting for another start of Android to finish"
   ready="$(mktemp "${CVD_TMP_DIR}/start.lock.XXXXXX")"
-  flock -o -w "$((CVD_BOOT_MAX_SEC + 60))" "${lock}" \
+  flock -o -n "${START_LOCK_FILE}" \
     sh -c 'echo "$$" >"$1" && exec tail --pid="$2" -f /dev/null' sh "${ready}" "${owner}" \
     </dev/null >/dev/null 2>&1 3>&- &
   START_LOCK_PID="$!"
@@ -167,10 +166,18 @@ take_start_lock() {
   START_LOCK_HOLDER="$(cat "${ready}")"
   rm -f "${ready}"
   if [[ -z "${START_LOCK_HOLDER}" ]]; then
+    wait "${START_LOCK_PID}" 2>/dev/null || true
     START_LOCK_PID=""
-    die "timed out waiting for another start of Android to finish"
+    return 1
   fi
   trap release_start_lock EXIT
+}
+
+# Whether a start holds the start lock: Android is being launched, though for
+# a few seconds no VM process may show yet (Cuttlefish's launcher re-runs
+# itself as "cvd create" before run_cvd starts).
+android_start_in_progress() {
+  [[ -e "${START_LOCK_FILE}" ]] && ! flock -n "${START_LOCK_FILE}" true 2>/dev/null
 }
 
 # Ends tail, and waits for flock to exit with it, which frees the lock.
@@ -212,7 +219,11 @@ start_cvd() {
   split_start_args args scrcpy_dpi "$@"
   SCRCPY_DPI="${scrcpy_dpi}"
 
-  take_start_lock
+  if ! take_start_lock; then
+    log "another start of Android is in progress"
+    respond "Android virtual device start already in progress"
+    return 0
+  fi
   if has_live_cvd_processes; then
     release_start_lock
     log "Cuttlefish is already running under ${CVD_HOME_DIR}"

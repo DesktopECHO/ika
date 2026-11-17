@@ -107,6 +107,10 @@ main() {
       ;;
     stop)
       shift
+      if ! has_live_cvd_processes && android_start_in_progress; then
+        respond "Android virtual device start in progress; stop it once it has started"
+        return 1
+      fi
       stop_startup_packaged_scrcpy
       stop_app_menu_watcher
       unmount_android_storage
@@ -165,6 +169,8 @@ main() {
       if has_live_cvd_processes; then
         respond "Android virtual device running."
         respond_console_frame_path
+      elif android_start_in_progress; then
+        respond "Android virtual device starting."
       else
         respond "Android virtual device not running."
       fi

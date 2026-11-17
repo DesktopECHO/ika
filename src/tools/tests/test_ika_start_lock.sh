@@ -5,8 +5,9 @@
 # before the first one's run_cvd read it, and systemd removed that scope when
 # the second cvd found the group running, so the first run_cvd could not move
 # itself to the cgroup and the start failed. A start now holds a lock from its
-# check for a running VM until the VM has booted or failed; another start waits
-# for it, then finds the VM running. The lock is released however the start
+# check for a running VM until the VM has booted or failed; another start says
+# a start is in progress and launches nothing, ika status says Android is
+# starting and ika stop leaves it. The lock is released however the start
 # ends, even when it is killed, and processes it left running, such as adb's
 # server, never hold it.
 
@@ -69,19 +70,37 @@ grep -q "Android virtual device running" "${LOG}" || fail "no running VM reporte
 kill "${CHILD_PID}"
 CHILD_PID=""
 
-# A second start waits for the first one's VM to boot, then finds it running.
-has_live_cvd_processes() { [[ -e "${TEST_ROOT}/booted" ]]; }
-rm -f "${TEST_ROOT}/booted"
-flock "${LOCK}" sh -c 'touch "$1/locked"; sleep 1; touch "$1/booted"' sh "${TEST_ROOT}" &
+# A second start while the first one's VM boots says so and launches nothing,
+# and leaves the first one's lock as it was.
+has_live_cvd_processes() { return 1; }
+# The first step of a launch, after the lock.
+record_gpu_in_use() { touch "${TEST_ROOT}/launched"; return 1; }
+rm -f "${TEST_ROOT}/locked" "${TEST_ROOT}/launched" "${TEST_ROOT}/release"
+flock "${LOCK}" sh -c 'touch "$1/locked"; until [ -e "$1/release" ]; do sleep 0.05; done' \
+  sh "${TEST_ROOT}" &
+HOLDER="$!"
 until [[ -e "${TEST_ROOT}/locked" ]]; do sleep 0.05; done
 ( START_CONSOLE=false start_cvd false ) >"${LOG}" 2>&1 3>&1 \
-  || fail "the waiting start failed: $(cat "${LOG}")"
-wait
-grep -qF "waiting for another start of Android to finish" "${LOG}" \
-  || fail "the second start did not wait: $(cat "${LOG}")"
-grep -qF "Cuttlefish is already running" "${LOG}" \
-  || fail "the second start did not find the VM running: $(cat "${LOG}")"
-lock_is_free || fail "the lock stayed held after the waiting start"
+  || fail "the second start failed: $(cat "${LOG}")"
+grep -qF "Android virtual device start already in progress" "${LOG}" \
+  || fail "the second start did not say a start is in progress: $(cat "${LOG}")"
+[[ ! -e "${TEST_ROOT}/launched" ]] || fail "the second start launched the VM"
+! lock_is_free || fail "the second start released the first one's lock"
+android_start_in_progress || fail "a start in progress not seen"
+expect_ika() {
+  local expected="$1" status=0
+  shift
+  ( main "$@" ) >"${LOG}" 2>&1 3>&1 || status=$?
+  grep -qF "${expected}" "${LOG}" || fail "ika $*: expected '${expected}', got: $(cat "${LOG}")"
+  printf '%s\n' "${status}"
+}
+[[ "$(expect_ika "Android virtual device starting." status)" == 0 ]] \
+  || fail "ika status failed during a start"
+[[ "$(expect_ika "start in progress; stop it once it has started" stop)" != 0 ]] \
+  || fail "ika stop succeeded during a start"
+touch "${TEST_ROOT}/release"
+wait "${HOLDER}"
+! android_start_in_progress || fail "a start in progress seen after it ended"
 
 # A start that fails after taking the lock releases it on exit, although a
 # process it left is still running.
