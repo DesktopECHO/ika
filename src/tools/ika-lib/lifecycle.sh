@@ -177,6 +177,7 @@ start_cvd() {
   local -a cvd_env_args=(env)
   local -a own_session=()
   local -a start_args=()
+  local vm_unit
 
   take_gpu_mode_auto start_args "$@"
   set -- "${start_args[@]}"
@@ -252,6 +253,7 @@ start_cvd() {
   # console has. setsid keeps the subshell's process, which leads no process
   # group.
   [[ "${IKA_ON_WSLG}" != true ]] || own_session=(setsid)
+  vm_unit="ika-android-$(date +%s)"
   (
     cd "${CVD_PRODUCT_OUT}"
     # The VM outlives this start, which unlocks the lock on its way out but
@@ -260,7 +262,7 @@ start_cvd() {
     # systemd-run --scope runs the command in this process: launcher_pid stays
     # the launcher's.
     exec "${own_session[@]+"${own_session[@]}"}" systemd-run --user --scope --quiet --collect -p Delegate=yes \
-      --unit="ika-android-$(date +%s)" -- \
+      --unit="${vm_unit}" -- \
       "${IKA_SCRIPT_PATH}" __launch-in-vcpu-scope \
       "$(start_arg_value "cpus" "${CVD_COMPUTE_DEFAULTS[cpus]}" "$@")" \
       "${cvd_env_args[@]}" "${CVD_BIN}" "${args[@]}"
@@ -278,6 +280,7 @@ start_cvd() {
   fi
   release_start_lock
   adb_serial="$(resolve_adb_serial)"
+  start_guest_sync_on_shutdown "${vm_unit}" "${adb_serial}"
 
   log "Ika console ready"
   # Alongside the console, which they would otherwise hold up.

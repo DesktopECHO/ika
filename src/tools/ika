@@ -72,6 +72,14 @@ main() {
     return
   fi
 
+  # The stop of the service start_guest_sync_on_shutdown starts, which has
+  # seconds to run: before the GPU probe, which a sync has no use for
+  if [[ "${command}" == "__sync-guest" ]]; then
+    normalize_stop_grace_seconds
+    sync_guest_disks "${2:-}"
+    return
+  fi
+
   ika_ini_warn_unknown
   setup_wsl_gpu_env
   setup_gpu_selection "${command}"

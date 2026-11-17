@@ -796,6 +796,26 @@ sync_guest_disks() {
     || log "Android did not write its data to disk within ${IKA_STOP_GRACE_SEC}s; stopping anyway"
 }
 
+# A logout, the host's shutdown and, on WSL, "wsl --shutdown" or Windows'
+# shutdown have systemd stop the scope the VM runs in (VM_UNIT.scope): its
+# processes get SIGTERM, and the VM ends with no sync, which loses what
+# Android had not yet written, as a stop without the sync above would. Starts
+# a service bound to the scope and ordered after it: systemd stops units in
+# the reverse order, so the service's stop, the sync, runs and ends before the
+# scope's. When the VM stops by itself, the service stops with it. WSL gives
+# the units about 10 s to stop.
+start_guest_sync_on_shutdown() {
+  local vm_unit="$1"
+  local adb_serial="$2"
+
+  systemd-run --user --quiet --collect --unit="${vm_unit}-sync" \
+    -p BindsTo="${vm_unit}.scope" -p After="${vm_unit}.scope" \
+    -p RemainAfterExit=yes \
+    -p ExecStop="${IKA_SCRIPT_PATH} __sync-guest ${adb_serial}" true \
+    >/dev/null 2>&1 \
+    || log "could not have systemd sync Android's disks at a logout or shutdown"
+}
+
 # Prints an epoch time in a date(1) format, with GNU or BSD date.
 format_epoch() {
   date -d "@$1" "+$2" 2>/dev/null || date -r "$1" "+$2"

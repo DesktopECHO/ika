@@ -123,6 +123,10 @@ ika restart    # stop and start again, with new options if given
 - `ika start -f` opens the console fullscreen, and `ika start --no-console`
   starts Android without it; app windows open either way.
 - `ika start` while Android runs reopens the console.
+- `ika stop` and `ika restart` have Android write its data to disk before
+  they stop it, and so do logging out and shutting the computer down while
+  Android runs; on Windows, so does `wsl --shutdown`, which gives it about 10
+  seconds.
 - **Updating the ROM:** a new `ika-lineageos` would make Cuttlefish rebuild
   Android's disk and discard its data, so `ika start` refuses to start after
   one and says so. Run `ika backup` before installing it, then `ika reset` and

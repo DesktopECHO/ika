@@ -108,6 +108,18 @@ printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >> "$ADB_TEST_LOG"' \
 sync_log="$(sync_guest_disks "vsock:3:5555" 2>&1)" || fail "a failed sync failed the stop"
 [[ "${sync_log}" == *"stopping anyway"* ]] || fail "a failed sync was not logged: ${sync_log}"
 
+# A start leaves a service beside the VM's scope whose stop, which a logout or
+# a shutdown runs before the scope's, syncs the same way.
+systemd-run() { printf '%s\n' "$*" > "${TEST_ROOT}/systemd-run.args"; }
+start_guest_sync_on_shutdown ika-android-42 vsock:3:5555
+assert_equal "--user --quiet --collect --unit=ika-android-42-sync -p BindsTo=ika-android-42.scope -p After=ika-android-42.scope -p RemainAfterExit=yes -p ExecStop=${IKA_SCRIPT_PATH} __sync-guest vsock:3:5555 true" \
+  "$(<"${TEST_ROOT}/systemd-run.args")"
+unset -f systemd-run
+printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >> "$ADB_TEST_LOG"' > "${fake_adb}"
+: > "${ADB_TEST_LOG}"
+main __sync-guest vsock:3:5555
+assert_equal $'-s vsock:3:5555 shell :\n-s vsock:3:5555 shell sync' "$(<"${ADB_TEST_LOG}")"
+
 # A stop syncs first; a factory reset, which discards the data, does not.
 calls=()
 sync_guest_disks() { calls+=("sync"); }
@@ -125,4 +137,4 @@ calls=()
 stop_cvd_internal true
 assert_equal "stop" "${calls[*]}"
 
-printf 'PASS: adb server log trim, guest disconnect and sync before a stop\n'
+printf 'PASS: adb server log trim, guest disconnect and sync before a stop, a logout or a shutdown\n'
