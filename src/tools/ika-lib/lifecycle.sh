@@ -136,6 +136,35 @@ remove_unreadable_cvd_config() {
   done
 }
 
+START_LOCK_FD=""
+
+# Lets one start at a time launch the VM, until it has booted or failed. Two
+# starts at once (a script and a menu launcher, say) both found no VM and
+# launched it: the second wrote its own scope's cgroup into vcpu-config.json
+# before the first one's run_cvd read it, and systemd removed that scope when
+# the second cvd found the group running, so run_cvd failed on a cgroup that
+# was gone. A start that waits here finds the VM running and opens its console.
+take_start_lock() {
+  mkdir -p "${CVD_TMP_DIR}"
+  exec {START_LOCK_FD}>"${CVD_TMP_DIR}/start.lock"
+  if ! flock -n "${START_LOCK_FD}"; then
+    log "waiting for another start of Android to finish"
+    flock -w "$((CVD_BOOT_MAX_SEC + 60))" "${START_LOCK_FD}" \
+      || die "timed out waiting for another start of Android to finish"
+  fi
+  trap release_start_lock EXIT
+}
+
+# Unlocks before closing: processes the start leaves running, such as adb's
+# server, hold copies of the lock's descriptor.
+release_start_lock() {
+  [[ -n "${START_LOCK_FD}" ]] || return 0
+  flock -u "${START_LOCK_FD}"
+  exec {START_LOCK_FD}>&-
+  START_LOCK_FD=""
+  trap - EXIT
+}
+
 start_cvd() {
   local fullscreen_mode="${1:-false}"
   shift || true
@@ -164,7 +193,9 @@ start_cvd() {
   split_start_args args scrcpy_dpi "$@"
   SCRCPY_DPI="${scrcpy_dpi}"
 
+  take_start_lock
   if has_live_cvd_processes; then
+    release_start_lock
     log "Cuttlefish is already running under ${CVD_HOME_DIR}"
     if [[ "${START_CONSOLE}" == "true" ]]; then
       respond_console "Instance already running, local console will be restarted"
@@ -223,7 +254,9 @@ start_cvd() {
   [[ "${IKA_ON_WSLG}" != true ]] || own_session=(setsid)
   (
     cd "${CVD_PRODUCT_OUT}"
-    exec 3>&-
+    # The VM outlives this start, which unlocks the lock on its way out but
+    # cannot if it is killed.
+    exec 3>&- {START_LOCK_FD}>&-
     # systemd-run --scope runs the command in this process: launcher_pid stays
     # the launcher's.
     exec "${own_session[@]+"${own_session[@]}"}" systemd-run --user --scope --quiet --collect -p Delegate=yes \
@@ -243,6 +276,7 @@ start_cvd() {
     fi
     die "Cuttlefish did not reach boot completion"
   fi
+  release_start_lock
   adb_serial="$(resolve_adb_serial)"
 
   log "Ika console ready"
