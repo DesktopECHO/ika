@@ -3,7 +3,7 @@
 %{!?ika_version:%{error:ika_version is not defined; build with src/tools/buildutils/build_package.sh}}
 Name:           ika-lineageos
 Version:        %{ika_version}
-Release:        1%{?dist}
+Release:        1
 Summary:        LineageOS for Cuttlefish host
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish

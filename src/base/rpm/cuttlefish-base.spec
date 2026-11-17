@@ -3,7 +3,7 @@
 %{!?ika_version:%{error:ika_version is not defined; build with src/tools/buildutils/build_package.sh}}
 Name:           ika-base
 Version:        %{ika_version}
-Release:        1%{?dist}
+Release:        1
 Summary:        Cuttlefish Android Virtual Device host packages for Fedora
 License:        Apache-2.0
 URL:            https://github.com/google/android-cuttlefish
