@@ -553,7 +553,11 @@ On an Intel UHD 770 Wild Life Extreme is 5% slower than with
 `gfxstream_guest_angle` (1,548 against 1,621). Kaby Lake's Iris Plus 650, with
 Vulkan 1.2, runs it when asked for (`--gpu_mode=venus`), slowly. When Windows removes the GPU's D3D12 device, as on the
 UHD 770 in Steel Nomad Light in either mode, the app drawing then stops and
-Android carries on.
+Android carries on. On the UHD 770 the GPU hangs on a page fault in the
+test's first frames (Windows logs LiveKernelEvent 141 for Intel's driver,
+and D3D12 reports `DXGI_ERROR_DEVICE_HUNG`), in a compute dispatch that runs
+without fault on its own, with the same shader, images, constants and memory
+placement.
 
 ### Linux and WSL2 compared
 
