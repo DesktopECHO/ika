@@ -37,7 +37,9 @@ exec_start_command() {
 
 main() {
   local command="${1:-help}"
+  local duration
   local fullscreen_mode
+  local start_ended
   local reset_data_gb
   local -a reset_args
   local -a start_args
@@ -107,21 +109,27 @@ main() {
       ;;
     stop)
       shift
-      if ! has_live_cvd_processes && android_start_in_progress; then
-        respond "Android virtual device start in progress; stop it once it has started"
-        return 1
+      start_ended="false"
+      if end_start_in_progress; then
+        start_ended="true"
       fi
       stop_startup_packaged_scrcpy
       stop_app_menu_watcher
       unmount_android_storage
       if ! has_live_cvd_processes; then
+        stop_ended_start_scope
         stop_dnsmasq
         report_udmabuf_leaks
         clear_stale_cvd_group
-        respond "Android virtual device not running"
+        if [[ "${start_ended}" == "true" ]]; then
+          respond "Android virtual device start stopped"
+        else
+          respond "Android virtual device not running"
+        fi
         return 0
       fi
       stop_cvd_internal false "$@"
+      stop_ended_start_scope
       respond "Android virtual device stopped"
       ;;
     reset)
@@ -152,10 +160,13 @@ main() {
       stop_app_menu_watcher
       unmount_android_storage
       protect_overlay_resume
+      end_start_in_progress || true
       if has_live_cvd_processes; then
         stop_cvd_internal false
+        stop_ended_start_scope
         sleep 0.5
       else
+        stop_ended_start_scope
         stop_dnsmasq
         respond "Android virtual device not running"
       fi
@@ -170,7 +181,8 @@ main() {
         respond "Android virtual device running."
         respond_console_frame_path
       elif android_start_in_progress; then
-        respond "Android virtual device starting."
+        duration="$(start_in_progress_duration)"
+        respond "Android virtual device starting${duration:+ (for ${duration})}."
       else
         respond "Android virtual device not running."
       fi

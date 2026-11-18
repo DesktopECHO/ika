@@ -17,10 +17,10 @@ A setting is taken from the first of these that gives it:
 
 | Command | What it does |
 | --- | --- |
-| `ika start [OPTIONS]` | Starts Android and opens the console. If Android is already running, reopens the console. While another `ika start` is starting Android, says so and does nothing. |
-| `ika stop` | Closes the console and app windows, unmounts Android's files and stops the VM. While Android is still being started, says so and leaves it. |
-| `ika restart [OPTIONS]` | Stops the VM and starts it again with the options given, or starts it if it is stopped. |
-| `ika status` | Says whether the VM is running or starting, and how the console's frames reach it (`DMA-BUFs`, or `pixels read back by crosvm`). |
+| `ika start [OPTIONS]` | Starts Android and opens the console. If Android is already running, reopens the console. While another `ika start` is starting Android, says so, and for how long, and does nothing; from the app menu, in a notification. |
+| `ika stop` | Closes the console and app windows, unmounts Android's files and stops the VM. While `ika start` is starting Android, ends that start and stops the VM it launched, once Cuttlefish has set up the VM's disks. |
+| `ika restart [OPTIONS]` | Stops the VM and starts it again with the options given, or starts it if it is stopped. Like `ika stop`, ends a start in progress first. |
+| `ika status` | Says whether the VM is running or starting (and for how long), and how the console's frames reach it (`DMA-BUFs`, or `pixels read back by crosvm`). |
 | `ika session` | Runs the login session that has only Ika in it, from the login screen's **Android** entry. See [A session with only Ika](USAGE.md#a-session-with-only-ika). |
 | `ika reset [--data_gb=GB]` | Factory-resets Android, after you type `y`. See [Factory reset](#factory-reset). |
 | `ika app` | Lists the apps that can be opened, with open app windows in bold and games in the background marked "(background)". |

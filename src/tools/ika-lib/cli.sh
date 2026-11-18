@@ -171,6 +171,7 @@ run_timed_operation() {
 
   start_epoch="$(date +%s)"
   "$@"
+  [[ "${START_LEFT_TO_ANOTHER:-false}" != "true" ]] || return 0
   elapsed_sec="$(( $(date +%s) - start_epoch ))"
 
   console_notify "${action}" "${elapsed_sec}"

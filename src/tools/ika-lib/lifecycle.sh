@@ -138,6 +138,10 @@ remove_unreadable_cvd_config() {
 
 START_LOCK_PID=""
 START_LOCK_HOLDER=""
+START_LOCK_SINCE=""
+# Set by a start that left the launch to another start in progress: it brought
+# no device online.
+START_LEFT_TO_ANOTHER="false"
 
 # Lets one start at a time launch the VM, until it has booted or failed: a
 # start that finds the lock taken returns 1, and says that a start is in
@@ -150,6 +154,12 @@ START_LOCK_HOLDER=""
 # flock holds the lock in a process of its own, so nothing the start launches,
 # such as adb's server, inherits it and keeps it after the start. Its command,
 # tail, ends with the start's process, so a start that is killed lets go too.
+#
+# The lock file says when the start began, its process and, once it has
+# launched the VM, the VM's systemd scope (write_start_lock_state), for
+# start_in_progress_duration and end_start_in_progress. The lock is on the
+# file, not its contents, so writing them keeps it. Until it lets go, the start
+# answers SIGTERM, from ika stop or ika restart, with end_start_for_stop.
 take_start_lock() {
   local owner="${BASHPID}"
   local ready
@@ -171,6 +181,28 @@ take_start_lock() {
     return 1
   fi
   trap release_start_lock EXIT
+  trap end_start_for_stop TERM
+  START_LOCK_SINCE="$(date +%s)"
+  write_start_lock_state
+}
+
+# Writes when this start began and its process, and the VM_UNIT it launches
+# the VM in, if given, into the lock file.
+write_start_lock_state() {
+  local vm_unit="${1:-}"
+
+  printf '%s %s%s\n' "${START_LOCK_SINCE}" "${BASHPID}" "${vm_unit:+ ${vm_unit}}" \
+    >"${START_LOCK_FILE}" 2>/dev/null || true
+}
+
+# A start ended by ika stop or ika restart, which stop the VM it launched:
+# quits without waiting for Android or reporting a failed boot.
+end_start_for_stop() {
+  trap - TERM
+  log "this start was ended by ika stop or ika restart"
+  respond_console "Android virtual device start stopped" 2>/dev/null || true
+  close_progress_notifications
+  exit 143
 }
 
 # Whether a start holds the start lock: Android is being launched, though for
@@ -180,6 +212,40 @@ android_start_in_progress() {
   [[ -e "${START_LOCK_FILE}" ]] && ! flock -n "${START_LOCK_FILE}" true 2>/dev/null
 }
 
+# How long the start in progress has been starting Android, as "45 s" or
+# "3 min 5 s"; nothing when that is not known. A first start, with Android
+# setting itself up, takes minutes on a slow host, and someone who sees no
+# window yet starts Ika again or stops it.
+start_in_progress_duration() {
+  local since="" elapsed
+
+  IFS=' ' read -r since _ <"${START_LOCK_FILE}" 2>/dev/null || true
+  [[ "${since}" =~ ^[0-9]+$ ]] || return 0
+  elapsed=$(( $(date +%s) - since ))
+  (( elapsed >= 0 )) || return 0
+  if (( elapsed >= 60 )); then
+    printf '%d min %d s\n' $(( elapsed / 60 )) $(( elapsed % 60 ))
+  else
+    printf '%d s\n' "${elapsed}"
+  fi
+}
+
+# Says that another start is starting Android and for how long: on the
+# output and, for ika run from a menu, where nothing shows its output, in a
+# notification. @DURATION@ in either message becomes " (for 3 min 5 s)", or
+# nothing when that is not known. With "console", also on the terminal, for a
+# start, whose output goes to the start log.
+report_start_in_progress() {
+  local message="$1" notification="$2" where="${3:-}" duration
+
+  duration="$(start_in_progress_duration)"
+  duration="${duration:+ (for ${duration})}"
+  message="${message//@DURATION@/${duration}}"
+  respond "${message}"
+  [[ "${where}" != "console" ]] || respond_console "${message}"
+  notify_user "${notification//@DURATION@/${duration}}"
+}
+
 # Ends tail, and waits for flock to exit with it, which frees the lock.
 release_start_lock() {
   [[ -n "${START_LOCK_PID}" ]] || return 0
@@ -187,7 +253,89 @@ release_start_lock() {
   wait "${START_LOCK_PID}" 2>/dev/null || true
   START_LOCK_PID=""
   START_LOCK_HOLDER=""
-  trap - EXIT
+  trap - EXIT TERM
+}
+
+# How long ika stop and ika restart wait, after ending a start that launched
+# the VM, for the VM to run, before they stop it anyway.
+IKA_STOP_LAUNCH_WAIT_SEC=120
+
+# The VM scope of the start end_start_in_progress ended, if it had launched
+# the VM; stop_ended_start_scope stops what is left in it.
+ENDED_START_UNIT=""
+
+# Whether the VM runs: Cuttlefish's run_cvd has started it. Before, the
+# launcher still sets up the VM's disks.
+vm_is_launched() {
+  pgrep -f '(^|/)(run_cvd|crosvm)([[:space:]]|$)' >/dev/null 2>&1
+}
+
+vm_scope_active() {
+  systemctl --user is-active --quiet "$1.scope" 2>/dev/null
+}
+
+# For ika stop and ika restart: ends the start in progress, if there is one, so
+# that it neither waits for Android nor reports a failed boot, and the VM it
+# launched can be stopped. When it has launched the VM, waits until the VM
+# runs, or the launch has ended: a launcher stopped while it writes a new data
+# disk would leave it half written for the next start. Returns 1 when no start
+# was in progress.
+end_start_in_progress() {
+  local since="" pid="" unit="" deadline appear_deadline seen_scope="false"
+
+  ENDED_START_UNIT=""
+  android_start_in_progress || return 1
+  IFS=' ' read -r since pid unit <"${START_LOCK_FILE}" 2>/dev/null || true
+  [[ "${pid}" =~ ^[0-9]+$ ]] || pid=""
+  [[ "${unit}" =~ ^ika-android-[0-9]+$ ]] || unit=""
+  log "ending the start in progress${pid:+ (process ${pid})}"
+  [[ -z "${pid}" ]] || kill -TERM "${pid}" 2>/dev/null || true
+  # It answers once the command it runs returns.
+  deadline="$(make_deadline 10)"
+  while android_start_in_progress && within_deadline "${deadline}"; do
+    sleep 0.1
+  done
+  if android_start_in_progress && [[ -n "${pid}" ]]; then
+    kill -KILL "${pid}" 2>/dev/null || true
+    deadline="$(make_deadline 5)"
+    while android_start_in_progress && within_deadline "${deadline}"; do
+      sleep 0.1
+    done
+  fi
+  ! android_start_in_progress || die "could not end the start in progress"
+
+  [[ -n "${unit}" ]] || return 0
+  ENDED_START_UNIT="${unit}"
+  # systemd-run may not have created the scope yet when the start ended.
+  deadline="$(make_deadline "${IKA_STOP_LAUNCH_WAIT_SEC}")"
+  appear_deadline="$(make_deadline 5)"
+  until vm_is_launched; do
+    if vm_scope_active "${unit}"; then
+      seen_scope="true"
+    elif [[ "${seen_scope}" == "true" ]] || ! within_deadline "${appear_deadline}"; then
+      return 0
+    fi
+    if ! within_deadline "${deadline}"; then
+      log "the VM's launcher did not start it within ${IKA_STOP_LAUNCH_WAIT_SEC}s; stopping it"
+      return 0
+    fi
+    sleep 0.2
+  done
+  log "waited for the launched VM to run, to stop it"
+}
+
+# Stops what is left in the VM scope of the start end_start_in_progress ended,
+# such as a launcher that has not started the VM.
+stop_ended_start_scope() {
+  [[ -n "${ENDED_START_UNIT}" ]] || return 0
+  vm_scope_active "${ENDED_START_UNIT}" || return 0
+  log "stopping what is left of ${ENDED_START_UNIT}.scope"
+  stop_vm_scope "${ENDED_START_UNIT}" \
+    || log "warning: could not stop ${ENDED_START_UNIT}.scope"
+}
+
+stop_vm_scope() {
+  timeout 60 systemctl --user stop "$1.scope" >/dev/null 2>&1
 }
 
 start_cvd() {
@@ -221,7 +369,10 @@ start_cvd() {
 
   if ! take_start_lock; then
     log "another start of Android is in progress"
-    respond "Android virtual device start already in progress"
+    report_start_in_progress "Android virtual device start already in progress@DURATION@" \
+      "Android is still starting@DURATION@. A first start, or the first after a reset, can take a few minutes." \
+      console
+    START_LEFT_TO_ANOTHER="true"
     return 0
   fi
   if has_live_cvd_processes; then
@@ -283,6 +434,9 @@ start_cvd() {
   # group.
   [[ "${IKA_ON_WSLG}" != true ]] || own_session=(setsid)
   vm_unit="ika-android-$(date +%s)"
+  # Before the launch, so that ika stop finds the VM's scope however soon it
+  # comes.
+  write_start_lock_state "${vm_unit}"
   (
     cd "${CVD_PRODUCT_OUT}"
     exec 3>&-
