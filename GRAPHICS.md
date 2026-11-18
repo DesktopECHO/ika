@@ -561,6 +561,7 @@ next frame, so its buttons did not highlight under the pointer.
 | `IKA_D3D12_DRED=1` | The shim turns on D3D12's DRED. When the device is removed, it logs why, the GPU work in flight and the D3D12 call that removed it, to crosvm's log and `/tmp/ika-dred.log` |
 | `IKA_DZN_TRACE_REMOVAL=1` | With `IKA_D3D12_DRED=1`, the layer also logs the first Vulkan call after which the device was removed |
 | `IKA_ASTC_DECODE=gpu` or `cpu` | gfxstream decodes ASTC textures on the GPU or on the CPU, on any host. Without it, the CPU on Dozen and the GPU elsewhere |
+| `DZN_DEBUG=nobc3emulation` | Dozen keeps emulated ASTC and ETC2 textures as RGBA8 instead of BC3 |
 
 ### Venus on WSL2
 
@@ -585,7 +586,14 @@ an fd, so Venus runs differently from Linux:
   Chromium decodes video itself.
 - Dozen decodes ETC2 and ASTC textures with Mesa's compute decoders, which
   Cuttlefish turns on for crosvm (`vk_require_etc2`, `vk_require_astc`):
-  Android expects both, and 3DMark draws with ASTC.
+  Android expects both, and 3DMark draws with ASTC. Ika's Dozen keeps ASTC
+  and the ETC2 colour formats as BC3, one byte a texel, as gfxstream does,
+  instead of RGBA8's four
+  ([dzn-bc3-emulation.patch](src/tools/mesa/dzn-bc3-emulation.patch)): a
+  compute shader encodes each decoded upload. On an integrated GPU, which
+  reads textures from the host's memory, RGBA8 cost Venus its lead over
+  gfxstream. GPUs whose D3D12 driver lacks BC textures of any size keep
+  RGBA8.
 - Ika's Dozen offers `VK_EXT_queue_family_foreign`, which Venus passes on to
   Android's apps
   ([dzn-queue-family-foreign.patch](src/tools/mesa/dzn-queue-family-foreign.patch)).
@@ -602,6 +610,10 @@ app's draws takes most of the host's time there, in the D3D12 driver, so
 virglrenderer records the command buffers the guest sends on two worker
 threads (`VKR_RECORD_THREADS`), as gfxstream does, and submits on a thread of
 their own while the next ones are decoded.
+On a Radeon 780M Wild Life Extreme scores 4,437 and 4,427 against 4,337 and
+4,313 with `gfxstream_guest_angle`, and 3,979 and 3,955 with Dozen's textures
+kept as RGBA8 (`DZN_DEBUG=nobc3emulation`); Steel Nomad Light 2,329 against
+1,899. The UHD 770 and the Iris Plus 650 score the same with either format.
 On an Intel UHD 770 Wild Life Extreme is 5% slower than with
 `gfxstream_guest_angle` (1,548 against 1,621). Kaby Lake's Iris Plus 650, with
 Vulkan 1.2, runs it when asked for (`--gpu_mode=venus`), slowly. When Windows removes the GPU's D3D12 device, as on the
