@@ -574,6 +574,14 @@ an fd, so Venus runs differently from Linux:
 - Dozen decodes ETC2 and ASTC textures with Mesa's compute decoders, which
   Cuttlefish turns on for crosvm (`vk_require_etc2`, `vk_require_astc`):
   Android expects both, and 3DMark draws with ASTC.
+- Ika's Dozen offers `VK_EXT_queue_family_foreign`, which Venus passes on to
+  Android's apps
+  ([dzn-queue-family-foreign.patch](src/tools/mesa/dzn-queue-family-foreign.patch)).
+  Chromium draws with Skia Graphite on Dawn, and Dawn uses Android's hardware
+  buffers only with that extension: without it Chromium exited at every start
+  ("GPU process isn't usable"). Dozen already moves an image handed to another
+  queue family to D3D12's common layout, which shared resources need, so the
+  foreign family works as the external one does.
 
 On an RTX 4080 Laptop GPU, with Ika's console open, Wild Life Extreme scores
 17,650 and 16,107 against 14,253 and 13,667 with `gfxstream_guest_angle`.

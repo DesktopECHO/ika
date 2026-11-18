@@ -39,3 +39,4 @@ dzn-recycle-default-bufs.patch
 dzn-storage-image-int-views.patch
 dzn-storage-buffer-byte-views.patch
 dzn-flatten-buffer-workgroups.patch
+dzn-queue-family-foreign.patch

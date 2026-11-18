@@ -1,0 +1,30 @@
+dzn: Offer VK_EXT_queue_family_foreign
+
+Venus passes VK_EXT_queue_family_foreign through from the host driver, and
+Dawn, Chrome's Graphite backend, counts VK_ANDROID_external_memory_android_
+hardware_buffer only when the device also has it. Under WSL2 the guest's
+Venus device therefore had hardware buffers but Dawn did not, so Dawn
+lacked YCbCrVulkanSamplers, which Chrome requires on Android: Chromium's GPU
+process failed to create its Dawn device and Chromium exited at every start
+("GPU process isn't usable").
+
+Dozen already treats a barrier to or from any queue family other than the
+command pool's as an ownership transfer, moving the image to or from
+D3D12_BARRIER_LAYOUT_COMMON, the layout D3D12 requires of a resource shared
+with another device or process; the legacy barrier path ignores queue
+families. VK_QUEUE_FAMILY_FOREIGN_EXT takes that path as
+VK_QUEUE_FAMILY_EXTERNAL does, so offering the extension needs no other
+change.
+
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 67dcfdb..7dce5ae 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -176,6 +176,7 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
+       .EXT_pipeline_creation_cache_control   = true,
+       .EXT_pipeline_creation_feedback        = true,
+       .EXT_private_data                      = true,
++      .EXT_queue_family_foreign              = true,
+       .EXT_tooling_info                      = true,
+       .MSFT_layered_driver                   = true,
+    };
