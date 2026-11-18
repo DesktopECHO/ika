@@ -1,0 +1,34 @@
+Patch summary:
+Skip Vulkan layer libraries that would load through the native bridge. Android's
+Vulkan loader looks for layers in every app's native library folder, so an arm64
+game that ships a layer (Wuthering Waves: libVkLayer_mfrc.so) has it opened by the
+x86-64 loader through Berberis as soon as HWUI starts Vulkan. The loader asks for
+its entry points without a signature, Berberis then wraps them as
+ANativeActivity_onCreate, and the app crashes in its RenderThread. Such a layer
+cannot be used by the host loader in any case, so it is left out.
+
+diff --git a/vulkan/libvulkan/layers_extensions.cpp b/vulkan/libvulkan/layers_extensions.cpp
+index c073579d3d..bda31f27e9 100644
+--- a/vulkan/libvulkan/layers_extensions.cpp
++++ b/vulkan/libvulkan/layers_extensions.cpp
+@@ -147,6 +147,20 @@ bool LayerLibrary::Open() {
+                 refcount_ = 0;
+                 return false;
+             }
++            // A layer built for another ABI is loaded through the native
++            // bridge, which can only wrap a function with a known signature
++            // (GetTrampoline passes none), and the loader cannot hand such a
++            // layer its own dispatch functions. Skip the library.
++            if (native_bridge_) {
++                ALOGW("skipping layer library '%s': built for another ABI", path_.c_str());
++                if (!android::CloseNativeLibrary(dlhandle_, native_bridge_, &error_msg)) {
++                    ALOGE("failed to unload library '%s': %s", path_.c_str(), error_msg);
++                    android::NativeLoaderFreeErrorMessage(error_msg);
++                }
++                dlhandle_ = nullptr;
++                refcount_ = 0;
++                return false;
++            }
+             opened_with_native_loader_ = true;
+         } else {
+             dlhandle_ = dlopen(path_.c_str(), RTLD_NOW | RTLD_LOCAL);
