@@ -21,8 +21,11 @@
  *    named other than gfxstream's own ("AEMU"), and for Dawn's, the
  *    layer reports the feature, hands out placeholder conversion objects and
  *    drops VkSamplerYcbcrConversionInfo before dzn sees it: sampling then reads
- *    the image as is, without YCbCr-to-RGB conversion. Set IKA_DZN_FAKE_YCBCR=0
- *    to turn this off.
+ *    the image as is, without YCbCr-to-RGB conversion. It also lists
+ *    VK_KHR_sampler_ycbcr_conversion, which dzn does not: Skia queries the
+ *    feature of a Vulkan 1.1 app (SurfaceFlinger's RenderEngine) only when the
+ *    extension is listed, and without it SurfaceFlinger aborted on the first
+ *    video frame in Venus mode. Set IKA_DZN_FAKE_YCBCR=0 to turn this off.
  *
  * 4. gfxstream's ETC2/ASTC decompression creates its output image with the
  *    guest's VkImageFormatListCreateInfo, then writes it through an R8G8B8A8_UINT
@@ -67,7 +70,13 @@
  *    buffer, a software video decoder's frame. gfxstream keeps such a buffer
  *    as RGBA8, converted from the guest's YUV bytes. Where item 3 applies and
  *    dzn cannot sample a 4:2:0 YUV format, the layer creates its images and
- *    views as RGBA8, which the conversion item 3 skips reads as it is.
+ *    views as RGBA8, which the conversion item 3 skips reads as it is. In
+ *    Venus mode crosvm's gralloc keeps such a buffer as RGBA8 too, converted
+ *    from the guest's YUV bytes (PATCH.rutabaga_gfx_yuv-rgba-fallback.patch),
+ *    and the layer reports for the YUV format what the RGBA8 image can do
+ *    (sampling, filtering, copies, midpoint chroma), and the RGBA8 image's
+ *    limits: Android's Vulkan takes a hardware buffer's features from the
+ *    format's, which dzn reports as none.
  *
  * Diagnostics: with IKA_DZN_TRACE_REMOVAL=1 (and IKA_D3D12_DRED=1 for the
  * libd3d12.so shim), the layer checks after each resource, descriptor and
@@ -104,12 +113,20 @@ struct instance_data {
   PFN_vkGetPhysicalDeviceFeatures2 get_features2_khr;
   PFN_vkGetPhysicalDeviceProperties2 get_properties2;
   PFN_vkGetPhysicalDeviceProperties2 get_properties2_khr;
+  PFN_vkGetPhysicalDeviceFormatProperties get_format_props;
+  PFN_vkGetPhysicalDeviceFormatProperties2 get_format_props2;
+  PFN_vkGetPhysicalDeviceFormatProperties2 get_format_props2_khr;
   int fake_ycbcr;
   struct instance_data *next;
 };
 
 static const VkExtensionProperties provoking_vertex_ext = {VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME,
                                                            VK_EXT_PROVOKING_VERTEX_SPEC_VERSION};
+
+/* Item 3: listed with the faked feature, for apps that look for the extension's name
+ * before they query samplerYcbcrConversion (Skia, for Vulkan 1.1 apps). */
+static const VkExtensionProperties ycbcr_ext = {VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
+                                                VK_KHR_SAMPLER_YCBCR_CONVERSION_SPEC_VERSION};
 
 /* The 4:2:0 YUV formats gfxstream gives Android's YUV buffers (item 8). */
 static const VkFormat yuv_formats[] = {VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM};
@@ -203,18 +220,6 @@ static VkResult fixed_image_format_props2(PFN_vkGetPhysicalDeviceImageFormatProp
   return result;
 }
 
-static VKAPI_ATTR VkResult VKAPI_CALL layer_GetPhysicalDeviceImageFormatProperties2(
-    VkPhysicalDevice pdev, const VkPhysicalDeviceImageFormatInfo2 *info, VkImageFormatProperties2 *props) {
-  struct instance_data *data = find_instance(pdev);
-  return fixed_image_format_props2(data->get_image_format_props2, pdev, info, props);
-}
-
-static VKAPI_ATTR VkResult VKAPI_CALL layer_GetPhysicalDeviceImageFormatProperties2KHR(
-    VkPhysicalDevice pdev, const VkPhysicalDeviceImageFormatInfo2 *info, VkImageFormatProperties2 *props) {
-  struct instance_data *data = find_instance(pdev);
-  return fixed_image_format_props2(data->get_image_format_props2_khr, pdev, info, props);
-}
-
 /* Unlinks every struct of the given type from a pNext chain; restore_chain() puts them back. */
 #define MAX_UNLINKED 4
 struct unlinked {
@@ -240,6 +245,104 @@ static void restore_chain(struct unlinked *list, int n) {
   for (int i = n - 1; i >= 0; i--) list[i].prev->pNext = list[i].removed;
 }
 
+/* Item 8, for an instance's queries: whether the layer keeps images of this
+ * 4:2:0 YUV format as RGBA8 (the rule layer_CreateDevice applies per device). */
+static int instance_yuv_as_rgba(const struct instance_data *data, VkPhysicalDevice pdev, VkFormat format) {
+  int yuv = 0;
+  for (unsigned i = 0; i < sizeof(yuv_formats) / sizeof(yuv_formats[0]); i++) yuv |= format == yuv_formats[i];
+  if (!yuv || !data->fake_ycbcr || !data->get_format_props) return 0;
+  VkFormatProperties props = {0};
+  data->get_format_props(pdev, format, &props);
+  return !(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+}
+
+/* What the RGBA8 image kept for such a YUV format can do, reported as the
+ * format's optimal-tiling features. The YCbCr conversion is item 3's. */
+static VkFormatFeatureFlags yuv_rgba_features(const struct instance_data *data, VkPhysicalDevice pdev) {
+  VkFormatProperties rgba = {0};
+  data->get_format_props(pdev, VK_FORMAT_R8G8B8A8_UNORM, &rgba);
+  return (rgba.optimalTilingFeatures &
+          (VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+           VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT)) |
+         VK_FORMAT_FEATURE_MIDPOINT_CHROMA_SAMPLES_BIT |
+         VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT;
+}
+
+static VKAPI_ATTR void VKAPI_CALL layer_GetPhysicalDeviceFormatProperties(VkPhysicalDevice pdev, VkFormat format,
+                                                                         VkFormatProperties *props) {
+  struct instance_data *data = find_instance(pdev);
+  data->get_format_props(pdev, format, props);
+  if (instance_yuv_as_rgba(data, pdev, format)) {
+    props->linearTilingFeatures = 0;
+    props->optimalTilingFeatures = yuv_rgba_features(data, pdev);
+    props->bufferFeatures = 0;
+  }
+}
+
+static void fixed_format_props2(struct instance_data *data, PFN_vkGetPhysicalDeviceFormatProperties2 next,
+                                VkPhysicalDevice pdev, VkFormat format, VkFormatProperties2 *props) {
+  next(pdev, format, props);
+  if (!instance_yuv_as_rgba(data, pdev, format)) return;
+  VkFormatFeatureFlags features = yuv_rgba_features(data, pdev);
+  props->formatProperties.linearTilingFeatures = 0;
+  props->formatProperties.optimalTilingFeatures = features;
+  props->formatProperties.bufferFeatures = 0;
+  for (VkBaseOutStructure *s = props->pNext; s; s = s->pNext) {
+    if (s->sType == VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3) {
+      VkFormatProperties3 *p3 = (VkFormatProperties3 *)s;
+      p3->linearTilingFeatures = 0;
+      p3->optimalTilingFeatures = features;
+      p3->bufferFeatures = 0;
+    }
+  }
+}
+
+static VKAPI_ATTR void VKAPI_CALL layer_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice pdev, VkFormat format,
+                                                                          VkFormatProperties2 *props) {
+  struct instance_data *data = find_instance(pdev);
+  fixed_format_props2(data, data->get_format_props2, pdev, format, props);
+}
+
+static VKAPI_ATTR void VKAPI_CALL layer_GetPhysicalDeviceFormatProperties2KHR(VkPhysicalDevice pdev, VkFormat format,
+                                                                             VkFormatProperties2 *props) {
+  struct instance_data *data = find_instance(pdev);
+  fixed_format_props2(data, data->get_format_props2_khr, pdev, format, props);
+}
+
+/* Item 1, and item 8's limits: an image of a YUV format kept as RGBA8 has the
+ * RGBA8 image's, with one combined image sampler descriptor. */
+static VkResult yuv_image_format_props2(struct instance_data *data, PFN_vkGetPhysicalDeviceImageFormatProperties2 next,
+                                        VkPhysicalDevice pdev, const VkPhysicalDeviceImageFormatInfo2 *info,
+                                        VkImageFormatProperties2 *props) {
+  if (!instance_yuv_as_rgba(data, pdev, info->format)) return fixed_image_format_props2(next, pdev, info, props);
+  VkPhysicalDeviceImageFormatInfo2 rgba = *info;
+  rgba.format = VK_FORMAT_R8G8B8A8_UNORM;
+  rgba.flags &= ~VK_IMAGE_CREATE_DISJOINT_BIT;
+  VkSamplerYcbcrConversionImageFormatProperties *ycbcr = NULL;
+  for (VkBaseOutStructure *s = props->pNext; s; s = s->pNext) {
+    if (s->sType == VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES)
+      ycbcr = (VkSamplerYcbcrConversionImageFormatProperties *)s;
+  }
+  struct unlinked removed[MAX_UNLINKED];
+  int n = unlink_structs(props, VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES, removed);
+  VkResult result = fixed_image_format_props2(next, pdev, &rgba, props);
+  restore_chain(removed, n);
+  if (ycbcr) ycbcr->combinedImageSamplerDescriptorCount = 1;
+  return result;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL layer_GetPhysicalDeviceImageFormatProperties2(
+    VkPhysicalDevice pdev, const VkPhysicalDeviceImageFormatInfo2 *info, VkImageFormatProperties2 *props) {
+  struct instance_data *data = find_instance(pdev);
+  return yuv_image_format_props2(data, data->get_image_format_props2, pdev, info, props);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL layer_GetPhysicalDeviceImageFormatProperties2KHR(
+    VkPhysicalDevice pdev, const VkPhysicalDeviceImageFormatInfo2 *info, VkImageFormatProperties2 *props) {
+  struct instance_data *data = find_instance(pdev);
+  return yuv_image_format_props2(data, data->get_image_format_props2_khr, pdev, info, props);
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL layer_EnumerateDeviceExtensionProperties(VkPhysicalDevice pdev,
                                                                              const char *layer_name,
                                                                              uint32_t *count,
@@ -254,16 +357,20 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_EnumerateDeviceExtensionProperties(V
   uint32_t n = 0;
   VkResult result = data->enumerate_device_extensions(pdev, NULL, &n, NULL);
   if (result != VK_SUCCESS) return result;
-  VkExtensionProperties *all = calloc(n + 1, sizeof(*all));
+  VkExtensionProperties *all = calloc(n + 2, sizeof(*all));
   if (!all) return VK_ERROR_OUT_OF_HOST_MEMORY;
   result = data->enumerate_device_extensions(pdev, NULL, &n, all);
   if (result < 0) {
     free(all);
     return result;
   }
-  int present = 0;
-  for (uint32_t i = 0; i < n; i++) present |= !strcmp(all[i].extensionName, provoking_vertex_ext.extensionName);
+  int present = 0, ycbcr_present = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    present |= !strcmp(all[i].extensionName, provoking_vertex_ext.extensionName);
+    ycbcr_present |= !strcmp(all[i].extensionName, ycbcr_ext.extensionName);
+  }
   if (!present) all[n++] = provoking_vertex_ext;
+  if (data->fake_ycbcr && !ycbcr_present) all[n++] = ycbcr_ext;
 
   if (!props) {
     *count = n;
@@ -393,6 +500,13 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateInstance(const VkInstanceCreat
   data->get_properties2_khr =
       (PFN_vkGetPhysicalDeviceProperties2)gipa(*instance, "vkGetPhysicalDeviceProperties2KHR");
   if (!data->get_properties2_khr) data->get_properties2_khr = data->get_properties2;
+  data->get_format_props =
+      (PFN_vkGetPhysicalDeviceFormatProperties)gipa(*instance, "vkGetPhysicalDeviceFormatProperties");
+  data->get_format_props2 =
+      (PFN_vkGetPhysicalDeviceFormatProperties2)gipa(*instance, "vkGetPhysicalDeviceFormatProperties2");
+  data->get_format_props2_khr =
+      (PFN_vkGetPhysicalDeviceFormatProperties2)gipa(*instance, "vkGetPhysicalDeviceFormatProperties2KHR");
+  if (!data->get_format_props2_khr) data->get_format_props2_khr = data->get_format_props2;
   /* gfxstream's own instance is "AEMU"; Android apps' instances carry the app's
    * name. Dawn, Chrome's Graphite backend, leaves the name NULL and sets the
    * engine to "Dawn". Other unnamed instances, Android's own, are left alone. */
@@ -450,14 +564,18 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateDevice(VkPhysicalDevice pdev, 
   struct instance_data *instance = find_instance(pdev);
   PFN_vkCreateDevice create = (PFN_vkCreateDevice)gipa(instance->instance, "vkCreateDevice");
 
-  /* Hide the emulated VK_EXT_provoking_vertex from the driver. */
+  /* Hide the emulated VK_EXT_provoking_vertex from the driver, and the
+   * VK_KHR_sampler_ycbcr_conversion item 3 lists (its functions are core in
+   * Vulkan 1.1, and the layer answers them). */
   VkDeviceCreateInfo fixed = *info;
   const char **names = calloc(info->enabledExtensionCount + 1, sizeof(*names));
   if (!names) return VK_ERROR_OUT_OF_HOST_MEMORY;
   fixed.enabledExtensionCount = 0;
   for (uint32_t i = 0; i < info->enabledExtensionCount; i++) {
-    if (strcmp(info->ppEnabledExtensionNames[i], provoking_vertex_ext.extensionName))
-      names[fixed.enabledExtensionCount++] = info->ppEnabledExtensionNames[i];
+    const char *name = info->ppEnabledExtensionNames[i];
+    if (!strcmp(name, provoking_vertex_ext.extensionName)) continue;
+    if (instance->fake_ycbcr && !strcmp(name, ycbcr_ext.extensionName)) continue;
+    names[fixed.enabledExtensionCount++] = name;
   }
   fixed.ppEnabledExtensionNames = names;
   struct unlinked removed[MAX_UNLINKED];
@@ -1265,6 +1383,12 @@ EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ika_dzn_fix_GetInstanceProcAddr(
     return (PFN_vkVoidFunction)layer_GetPhysicalDeviceImageFormatProperties2;
   if (!strcmp(name, "vkGetPhysicalDeviceImageFormatProperties2KHR"))
     return (PFN_vkVoidFunction)layer_GetPhysicalDeviceImageFormatProperties2KHR;
+  if (!strcmp(name, "vkGetPhysicalDeviceFormatProperties"))
+    return (PFN_vkVoidFunction)layer_GetPhysicalDeviceFormatProperties;
+  if (!strcmp(name, "vkGetPhysicalDeviceFormatProperties2"))
+    return (PFN_vkVoidFunction)layer_GetPhysicalDeviceFormatProperties2;
+  if (!strcmp(name, "vkGetPhysicalDeviceFormatProperties2KHR"))
+    return (PFN_vkVoidFunction)layer_GetPhysicalDeviceFormatProperties2KHR;
   if (!strcmp(name, "vkEnumerateDeviceExtensionProperties"))
     return (PFN_vkVoidFunction)layer_EnumerateDeviceExtensionProperties;
   if (!strcmp(name, "vkGetPhysicalDeviceFeatures")) return (PFN_vkVoidFunction)layer_GetPhysicalDeviceFeatures;

@@ -310,6 +310,13 @@ crosvm_bin.annotation(
         # when its own device is lost. It changes code of
         # PATCH.rutabaga_gfx-wsl-optimal-images.patch, and sorts after it.
         "@//build_external/crosvm:PATCH.rutabaga_gfx_gralloc-lost-device-restart.patch",
+        # Under WSL2, a 4:2:0 YUV buffer the device cannot sample (a software
+        # video decoder's YV12 frame on Dozen) is an RGBA8 image, converted
+        # from the guest's YUV bytes on upload by a compute shader, as
+        # gfxstream converts them: Venus mode failed to allocate it and no
+        # video played. It changes code of the two patches above, and sorts
+        # after them.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx_yuv-rgba-fallback.patch",
     ],
     repositories = ["crosvm_bin"],
 )

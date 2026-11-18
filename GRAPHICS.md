@@ -430,13 +430,19 @@ choosing the GPU mode:
   - It offers `VK_EXT_provoking_vertex`, without which ANGLE stops at OpenGL
     ES 2.0. Flat-shaded values come from the first vertex.
   - For Android's Vulkan, it offers `samplerYcbcrConversion`, which
-    Chromium's Vulkan backends need. The conversion is skipped, so YCbCr
-    images are sampled as they are.
+    Chromium's Vulkan backends need, and lists `VK_KHR_sampler_ycbcr_conversion`
+    with it: Skia asks a Vulkan 1.1 app's device for the feature only when the
+    extension is listed, and in Venus mode SurfaceFlinger, which draws with
+    Skia on Vulkan 1.1, aborted on the first frame of a video. The conversion
+    is skipped, so YCbCr images are sampled as they are.
   - For Android's Vulkan, it creates images and views of the 4:2:0 YUV formats
     Dozen cannot sample, such as YV12's three-plane one (D3D12 has none), as
-    RGBA8. Ika's gfxstream keeps such a buffer as RGBA8 too, converted from the
-    guest's YUV bytes, so a software video decoder's frames show with their
-    colors; SurfaceFlinger aborted on them before, restarting Android.
+    RGBA8, and reports for those formats what an RGBA8 image can do (Dozen
+    reports nothing, and Android's Vulkan takes a video buffer's features from
+    its format's). Ika's gfxstream and, in Venus mode, crosvm keep such a
+    buffer as RGBA8 too, converted from the guest's YUV bytes, so a software
+    video decoder's frames show with their colors; SurfaceFlinger aborted on
+    them before, restarting Android.
   - It offers `fullDrawIndexUint32` and the full 32-bit index range, which
     D3D12 has but Dozen does not report. Chrome draws with Skia Graphite on
     Dawn, and Dawn's Vulkan backend requires the feature: without it Chrome
@@ -571,6 +577,12 @@ an fd, so Venus runs differently from Linux:
   display reads each frame back, and minigbm keeps a guest copy of a buffer an
   app also reads or writes with the CPU (screenshots, task snapshots), copied
   from the host when it is locked and back when it is unlocked.
+- A software video decoder's YUV frame is an RGBA8 image, as in gfxstream
+  mode: D3D12 has no three-plane format and Dozen samples no NV12, so crosvm
+  copies the frame from the decoder's guest copy to the GPU, where a compute
+  shader converts it, with the same BT.601 colors as gfxstream. Apps that play
+  video through Android's decoders (MediaCodec), such as Glimpse, play it;
+  Chromium decodes video itself.
 - Dozen decodes ETC2 and ASTC textures with Mesa's compute decoders, which
   Cuttlefish turns on for crosvm (`vk_require_etc2`, `vk_require_astc`):
   Android expects both, and 3DMark draws with ASTC.

@@ -1,0 +1,871 @@
+diff --git a/src/cross_domain/component.rs b/src/cross_domain/component.rs
+index b0b02f0..49f4c13 100644
+--- a/src/cross_domain/component.rs
++++ b/src/cross_domain/component.rs
+@@ -181,34 +181,40 @@ impl RutabagaComponent for CrossDomain {
+             );
+         }
+ 
++        // ika: a 4:2:0 YUV buffer is written by the CPU (a software video
++        // decoder) and read by the GPU: its host image may be RGBA8 (see
++        // VulkanoGralloc::optimal_image_format), so the guest's copy is the
++        // only YUV one and a lock keeps it as it is.
++        if info.drm_format.planar_layout()?.num_planes > 1 {
++            return Ok(());
++        }
+         let iovecs = resource
+             .backing_iovecs
+             .as_ref()
+             .ok_or(RutabagaError::InvalidIovec)?;
+-        let mut pixels = vec![0u8; stride * info.height as usize];
+-        let mut whole = transfer;
+-        whole.stride = stride as u32;
+-        whole.offset = 0;
+-        gralloc.read_image(
+-            resource.resource_id,
+-            handle,
+-            vulkan_info,
+-            info,
+-            resource.size,
+-            whole,
+-            &mut pixels,
+-        )?;
+-
++        // The image comes back laid out as the guest's copy: only the locked
++        // rows go from it to the guest's pages.
+         let bpp = stride / info.width as usize;
+         let x = (transfer.x as usize).min(info.width as usize);
+         let w = (transfer.w as usize).min(info.width as usize - x);
+         let y = (transfer.y as usize).min(info.height as usize);
+         let h = (transfer.h as usize).min(info.height as usize - y);
+-        for row in y..y + h {
+-            let start = row * stride + x * bpp;
+-            copy_to_iovecs(iovecs, start, &pixels[start..start + w * bpp]);
+-        }
+-        Ok(())
++        gralloc.read_image_into(
++            resource.resource_id,
++            handle,
++            vulkan_info,
++            info,
++            resource.size,
++            &mut |pixels| {
++                for row in y..y + h {
++                    let start = row * stride + x * bpp;
++                    if start + w * bpp > pixels.len() {
++                        break;
++                    }
++                    copy_to_iovecs(iovecs, start, &pixels[start..start + w * bpp]);
++                }
++            },
++        )
+     }
+ 
+     // A guest's unlock of a buffer it cannot map writes the guest pages back.
+@@ -228,26 +234,45 @@ impl RutabagaComponent for CrossDomain {
+             .as_ref()
+             .ok_or(RutabagaError::InvalidIovec)?;
+ 
++        // ika: a 4:2:0 YUV buffer goes whole, in the guest's layout: the
++        // gralloc converts the rows the transfer covers.
++        if info.drm_format.planar_layout()?.num_planes > 1 {
++            // A video decoder's frames: the bytes go from the guest's pages
++            // straight into the buffer the GPU converts them from.
++            return self.gralloc.lock().unwrap().write_image_from(
++                resource.resource_id,
++                handle,
++                vulkan_info,
++                info,
++                resource.size,
++                transfer,
++                &mut |dst| copy_from_iovecs(iovecs, 0, dst),
++            );
++        }
++
++        // Only the written rows go from the guest's pages to the buffer the
++        // image is uploaded from, which is laid out as the guest's copy.
+         let bpp = stride / info.width as usize;
+         let x = (transfer.x as usize).min(info.width as usize);
+         let w = (transfer.w as usize).min(info.width as usize - x);
+         let y = (transfer.y as usize).min(info.height as usize);
+         let h = (transfer.h as usize).min(info.height as usize - y);
+-        let mut pixels = vec![0u8; stride * info.height as usize];
+-        for row in y..y + h {
+-            let start = row * stride + x * bpp;
+-            copy_from_iovecs(iovecs, start, &mut pixels[start..start + w * bpp]);
+-        }
+-
+-        self.gralloc.lock().unwrap().write_image(
++        self.gralloc.lock().unwrap().write_image_from(
+             resource.resource_id,
+             handle,
+             vulkan_info,
+             info,
+             resource.size,
+             transfer,
+-            &pixels,
+-            stride,
++            &mut |dst| {
++                for row in y..y + h {
++                    let start = row * stride + x * bpp;
++                    if start + w * bpp > dst.len() {
++                        break;
++                    }
++                    copy_from_iovecs(iovecs, start, &mut dst[start..start + w * bpp]);
++                }
++            },
+         )
+     }
+ 
+diff --git a/src/rutabaga_gralloc/gralloc.rs b/src/rutabaga_gralloc/gralloc.rs
+index e13b93b..62a1337 100644
+--- a/src/rutabaga_gralloc/gralloc.rs
++++ b/src/rutabaga_gralloc/gralloc.rs
+@@ -275,6 +275,36 @@ pub trait Gralloc: Send {
+         Err(MagmaGpuError::Unsupported.into())
+     }
+ 
++    /// ika: as `read_image`, but hands the whole image's pixels, laid out as
++    /// the guest's copy of the buffer, to `sink`, which copies what it needs.
++    fn read_image_into(
++        &mut self,
++        _id: u32,
++        _handle: &MagmaGpuHandle,
++        _vulkan_info: VulkanInfo,
++        _info: ImageAllocationInfo,
++        _size: u64,
++        _sink: &mut dyn FnMut(&[u8]),
++    ) -> RutabagaResult<()> {
++        Err(MagmaGpuError::Unsupported.into())
++    }
++
++    /// ika: as `write_image`, but `fill` writes the bytes, laid out as the
++    /// guest's copy of the buffer, into one the implementation may hand
++    /// straight to the GPU; it writes at least the `transfer` rectangle.
++    fn write_image_from(
++        &mut self,
++        _id: u32,
++        _handle: &MagmaGpuHandle,
++        _vulkan_info: VulkanInfo,
++        _info: ImageAllocationInfo,
++        _size: u64,
++        _transfer: Transfer3D,
++        _fill: &mut dyn FnMut(&mut [u8]),
++    ) -> RutabagaResult<()> {
++        Err(MagmaGpuError::Unsupported.into())
++    }
++
+     /// ika: drops what `read_image` and `write_image` kept for `id`.
+     fn forget_image(&mut self, _id: u32) {}
+ 
+@@ -490,6 +520,43 @@ impl RutabagaGralloc {
+         gralloc.write_image(id, handle, vulkan_info, info, size, transfer, src, src_stride)
+     }
+ 
++    /// ika: see `Gralloc::read_image_into`.
++    pub fn read_image_into(
++        &mut self,
++        id: u32,
++        handle: &MagmaGpuHandle,
++        vulkan_info: VulkanInfo,
++        info: ImageAllocationInfo,
++        size: u64,
++        sink: &mut dyn FnMut(&[u8]),
++    ) -> RutabagaResult<()> {
++        let gralloc = self
++            .grallocs
++            .get_mut(&GrallocBackend::Vulkano)
++            .ok_or(RutabagaError::InvalidGrallocBackend)?;
++
++        gralloc.read_image_into(id, handle, vulkan_info, info, size, sink)
++    }
++
++    /// ika: see `Gralloc::write_image_from`.
++    pub fn write_image_from(
++        &mut self,
++        id: u32,
++        handle: &MagmaGpuHandle,
++        vulkan_info: VulkanInfo,
++        info: ImageAllocationInfo,
++        size: u64,
++        transfer: Transfer3D,
++        fill: &mut dyn FnMut(&mut [u8]),
++    ) -> RutabagaResult<()> {
++        let gralloc = self
++            .grallocs
++            .get_mut(&GrallocBackend::Vulkano)
++            .ok_or(RutabagaError::InvalidGrallocBackend)?;
++
++        gralloc.write_image_from(id, handle, vulkan_info, info, size, transfer, fill)
++    }
++
+     /// ika: see `Gralloc::forget_image`.
+     pub fn forget_image(&mut self, id: u32) {
+         if let Some(gralloc) = self.grallocs.get_mut(&GrallocBackend::Vulkano) {
+diff --git a/src/rutabaga_gralloc/mod.rs b/src/rutabaga_gralloc/mod.rs
+index 49a4179..36ba6bc 100644
+--- a/src/rutabaga_gralloc/mod.rs
++++ b/src/rutabaga_gralloc/mod.rs
+@@ -16,6 +16,7 @@ mod system_gralloc;
+ mod vulkano_gralloc;
+ 
+ pub use formats::DrmFormat;
++pub(crate) use formats::canonical_image_requirements;
+ pub use gralloc::ImageAllocationInfo;
+ pub use gralloc::ImageMemoryRequirements;
+ pub use gralloc::RutabagaGralloc;
+diff --git a/src/rutabaga_gralloc/vulkano_gralloc.rs b/src/rutabaga_gralloc/vulkano_gralloc.rs
+index f31e0d4..7d345d0 100644
+--- a/src/rutabaga_gralloc/vulkano_gralloc.rs
++++ b/src/rutabaga_gralloc/vulkano_gralloc.rs
+@@ -58,6 +58,14 @@ use vulkano::memory::allocator::MemoryAlloc;
+ use vulkano::memory::allocator::MemoryUsage;
+ use vulkano::memory::allocator::StandardMemoryAllocator;
+ use vulkano::command_buffer::SubmitInfo;
++use vulkano::descriptor_set::allocator::StandardDescriptorSetAlloc;
++use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
++use vulkano::descriptor_set::PersistentDescriptorSet;
++use vulkano::descriptor_set::WriteDescriptorSet;
++use vulkano::pipeline::ComputePipeline;
++use vulkano::pipeline::Pipeline;
++use vulkano::pipeline::PipelineBindPoint;
++use vulkano::shader::ShaderModule;
+ use vulkano::sync::fence::Fence;
+ use vulkano::sync::fence::FenceCreateInfo;
+ use vulkano::sync::fence::FenceError;
+@@ -84,6 +92,8 @@ use vulkano::VulkanLibrary;
+ use vulkano::VulkanObject;
+ 
+ use crate::rutabaga_gralloc::formats::canonical_image_requirements;
++use crate::rutabaga_gralloc::formats::DrmFormat;
++use crate::rutabaga_gralloc::formats::DRM_FORMAT_NV12;
+ use crate::rutabaga_gralloc::gralloc::Gralloc;
+ use crate::rutabaga_gralloc::gralloc::ImageAllocationInfo;
+ use crate::rutabaga_gralloc::gralloc::ImageMemoryRequirements;
+@@ -116,6 +126,11 @@ pub struct VulkanoGralloc {
+     // ika: set once a readback or upload finds the device lost, after which
+     // neither touches Vulkan again
+     device_lost: bool,
++    // ika: the compute pipeline that converts YUV buffers kept as RGBA8 (see
++    // optimal_image_format): None until first needed, Some(None) if the
++    // device could not create it, in which case the CPU converts them.
++    yuv_pipeline: Option<Option<Arc<ComputePipeline>>>,
++    descriptor_set_allocator: Option<StandardDescriptorSetAllocator>,
+ }
+ 
+ // ika: submits a readback or upload and waits for it on a fence of its own.
+@@ -234,6 +249,215 @@ struct Readback {
+     image: Arc<ExternalImage>,
+     buffer: Subbuffer<[u8]>,
+     bytes_per_pixel: u32,
++    // ika: the 4:2:0 YUV format of a buffer kept as an RGBA8 image (see
++    // optimal_image_format), whose guest bytes are converted on upload.
++    yuv: Option<DrmFormat>,
++    // ika: for the GPU conversion of such a buffer: the guest's YUV bytes,
++    // and the descriptor set binding them and `buffer` (the RGBA8 pixels) to
++    // the YUV pipeline.
++    yuv_src: Option<Subbuffer<[u8]>>,
++    yuv_set: Option<Arc<PersistentDescriptorSet<StandardDescriptorSetAlloc>>>,
++}
++
++// ika: SPIR-V of this compute shader (glslangValidator -V --target-env
++// vulkan1.1, then spirv-opt -O --strip-debug), which converts a 4:2:0 YUV
++// buffer to RGBA8 pixels as convert_yuv420_to_rgba does, one invocation per
++// pixel, local size 64x1:
++//
++//   layout(push_constant) uniform Params { uint width, height, y_offset,
++//       y_stride, u_offset, v_offset, c_stride, c_step; } p;
++//   layout(std430, binding = 0) readonly buffer Src { uint src[]; };
++//   layout(std430, binding = 1) writeonly buffer Dst { uint dst[]; };
++//   uint byte_at(uint o) { return (src[o >> 2] >> ((o & 3u) << 3)) & 0xffu; }
++//   void main() {
++//       uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;
++//       if (x >= p.width || y >= p.height) return;
++//       int c = 298 * (int(byte_at(p.y_offset + y * p.y_stride + x)) - 16) + 128;
++//       uint ch = (y >> 1) * p.c_stride + (x >> 1) * p.c_step;
++//       int d = int(byte_at(p.u_offset + ch)) - 128;
++//       int e = int(byte_at(p.v_offset + ch)) - 128;
++//       uint r = uint(clamp((c + 409 * e) >> 8, 0, 255));
++//       uint g = uint(clamp((c - 100 * d - 208 * e) >> 8, 0, 255));
++//       uint b = uint(clamp((c + 516 * d) >> 8, 0, 255));
++//       dst[y * p.width + x] = r | (g << 8) | (b << 16) | 0xff000000u;
++//   }
++static YUV420_TO_RGBA_SPIRV: [u32; 801] = [
++    0x07230203, 0x00010300, 0x0008000b, 0x000000d7, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
++    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
++    0x0006000f, 0x00000005, 0x00000004, 0x6e69616d, 0x00000000, 0x00000025, 0x00060010, 0x00000004,
++    0x00000011, 0x00000040, 0x00000001, 0x00000001, 0x00040047, 0x0000000c, 0x00000006, 0x00000004,
++    0x00030047, 0x0000000d, 0x00000002, 0x00040048, 0x0000000d, 0x00000000, 0x00000018, 0x00050048,
++    0x0000000d, 0x00000000, 0x00000023, 0x00000000, 0x00030047, 0x0000000f, 0x00000018, 0x00040047,
++    0x0000000f, 0x00000021, 0x00000000, 0x00040047, 0x0000000f, 0x00000022, 0x00000000, 0x00040047,
++    0x00000025, 0x0000000b, 0x0000001c, 0x00030047, 0x00000030, 0x00000002, 0x00050048, 0x00000030,
++    0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000030, 0x00000001, 0x00000023, 0x00000004,
++    0x00050048, 0x00000030, 0x00000002, 0x00000023, 0x00000008, 0x00050048, 0x00000030, 0x00000003,
++    0x00000023, 0x0000000c, 0x00050048, 0x00000030, 0x00000004, 0x00000023, 0x00000010, 0x00050048,
++    0x00000030, 0x00000005, 0x00000023, 0x00000014, 0x00050048, 0x00000030, 0x00000006, 0x00000023,
++    0x00000018, 0x00050048, 0x00000030, 0x00000007, 0x00000023, 0x0000001c, 0x00040047, 0x0000009a,
++    0x00000006, 0x00000004, 0x00030047, 0x0000009b, 0x00000002, 0x00040048, 0x0000009b, 0x00000000,
++    0x00000019, 0x00050048, 0x0000009b, 0x00000000, 0x00000023, 0x00000000, 0x00030047, 0x0000009d,
++    0x00000019, 0x00040047, 0x0000009d, 0x00000021, 0x00000001, 0x00040047, 0x0000009d, 0x00000022,
++    0x00000000, 0x00040047, 0x000000af, 0x0000000b, 0x00000019, 0x00020013, 0x00000002, 0x00030021,
++    0x00000003, 0x00000002, 0x00040015, 0x00000006, 0x00000020, 0x00000000, 0x0003001d, 0x0000000c,
++    0x00000006, 0x0003001e, 0x0000000d, 0x0000000c, 0x00040020, 0x0000000e, 0x0000000c, 0x0000000d,
++    0x0004003b, 0x0000000e, 0x0000000f, 0x0000000c, 0x00040015, 0x00000010, 0x00000020, 0x00000001,
++    0x0004002b, 0x00000010, 0x00000011, 0x00000000, 0x0004002b, 0x00000010, 0x00000013, 0x00000002,
++    0x00040020, 0x00000015, 0x0000000c, 0x00000006, 0x0004002b, 0x00000006, 0x00000019, 0x00000003,
++    0x0004002b, 0x00000010, 0x0000001b, 0x00000003, 0x0004002b, 0x00000006, 0x0000001e, 0x000000ff,
++    0x00040017, 0x00000023, 0x00000006, 0x00000003, 0x00040020, 0x00000024, 0x00000001, 0x00000023,
++    0x0004003b, 0x00000024, 0x00000025, 0x00000001, 0x0004002b, 0x00000006, 0x00000026, 0x00000000,
++    0x00040020, 0x00000027, 0x00000001, 0x00000006, 0x0004002b, 0x00000006, 0x0000002b, 0x00000001,
++    0x00020014, 0x0000002e, 0x000a001e, 0x00000030, 0x00000006, 0x00000006, 0x00000006, 0x00000006,
++    0x00000006, 0x00000006, 0x00000006, 0x00000006, 0x00040020, 0x00000031, 0x00000009, 0x00000030,
++    0x0004003b, 0x00000031, 0x00000032, 0x00000009, 0x00040020, 0x00000033, 0x00000009, 0x00000006,
++    0x0004002b, 0x00000010, 0x0000003b, 0x00000001, 0x0004002b, 0x00000010, 0x00000045, 0x0000012a,
++    0x0004002b, 0x00000010, 0x00000052, 0x00000010, 0x0004002b, 0x00000010, 0x00000055, 0x00000080,
++    0x0004002b, 0x00000010, 0x0000005a, 0x00000006, 0x0004002b, 0x00000010, 0x00000060, 0x00000007,
++    0x0004002b, 0x00000010, 0x00000066, 0x00000004, 0x0004002b, 0x00000010, 0x00000070, 0x00000005,
++    0x0004002b, 0x00000010, 0x0000007b, 0x00000199, 0x0004002b, 0x00000010, 0x0000007f, 0x00000008,
++    0x0004002b, 0x00000010, 0x00000081, 0x000000ff, 0x0004002b, 0x00000010, 0x00000086, 0x00000064,
++    0x0004002b, 0x00000010, 0x0000008a, 0x000000d0, 0x0004002b, 0x00000010, 0x00000093, 0x00000204,
++    0x0003001d, 0x0000009a, 0x00000006, 0x0003001e, 0x0000009b, 0x0000009a, 0x00040020, 0x0000009c,
++    0x0000000c, 0x0000009b, 0x0004003b, 0x0000009c, 0x0000009d, 0x0000000c, 0x0004002b, 0x00000006,
++    0x000000ab, 0xff000000, 0x0004002b, 0x00000006, 0x000000ae, 0x00000040, 0x0006002c, 0x00000023,
++    0x000000af, 0x000000ae, 0x0000002b, 0x0000002b, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
++    0x00000003, 0x000200f8, 0x00000005, 0x000300f7, 0x000000b0, 0x00000000, 0x000300fb, 0x00000026,
++    0x000000b1, 0x000200f8, 0x000000b1, 0x00050041, 0x00000027, 0x00000028, 0x00000025, 0x00000026,
++    0x0004003d, 0x00000006, 0x00000029, 0x00000028, 0x00050041, 0x00000027, 0x0000002c, 0x00000025,
++    0x0000002b, 0x0004003d, 0x00000006, 0x0000002d, 0x0000002c, 0x00050041, 0x00000033, 0x00000034,
++    0x00000032, 0x00000011, 0x0004003d, 0x00000006, 0x00000035, 0x00000034, 0x000500ae, 0x0000002e,
++    0x00000036, 0x00000029, 0x00000035, 0x000400a8, 0x0000002e, 0x00000037, 0x00000036, 0x000300f7,
++    0x00000039, 0x00000000, 0x000400fa, 0x00000037, 0x00000038, 0x00000039, 0x000200f8, 0x00000038,
++    0x00050041, 0x00000033, 0x0000003c, 0x00000032, 0x0000003b, 0x0004003d, 0x00000006, 0x0000003d,
++    0x0000003c, 0x000500ae, 0x0000002e, 0x0000003e, 0x0000002d, 0x0000003d, 0x000200f9, 0x00000039,
++    0x000200f8, 0x00000039, 0x000700f5, 0x0000002e, 0x0000003f, 0x00000036, 0x000000b1, 0x0000003e,
++    0x00000038, 0x000300f7, 0x00000041, 0x00000000, 0x000400fa, 0x0000003f, 0x00000040, 0x00000041,
++    0x000200f8, 0x00000040, 0x000200f9, 0x000000b0, 0x000200f8, 0x00000041, 0x00050041, 0x00000033,
++    0x00000046, 0x00000032, 0x00000013, 0x0004003d, 0x00000006, 0x00000047, 0x00000046, 0x00050041,
++    0x00000033, 0x00000049, 0x00000032, 0x0000001b, 0x0004003d, 0x00000006, 0x0000004a, 0x00000049,
++    0x00050084, 0x00000006, 0x0000004b, 0x0000002d, 0x0000004a, 0x00050080, 0x00000006, 0x0000004c,
++    0x00000047, 0x0000004b, 0x00050080, 0x00000006, 0x0000004e, 0x0000004c, 0x00000029, 0x000500c2,
++    0x00000006, 0x000000b9, 0x0000004e, 0x00000013, 0x00060041, 0x00000015, 0x000000ba, 0x0000000f,
++    0x00000011, 0x000000b9, 0x0004003d, 0x00000006, 0x000000bb, 0x000000ba, 0x000500c7, 0x00000006,
++    0x000000bd, 0x0000004e, 0x00000019, 0x000500c4, 0x00000006, 0x000000be, 0x000000bd, 0x0000001b,
++    0x000500c2, 0x00000006, 0x000000bf, 0x000000bb, 0x000000be, 0x000500c7, 0x00000006, 0x000000c0,
++    0x000000bf, 0x0000001e, 0x0004007c, 0x00000010, 0x00000051, 0x000000c0, 0x00050082, 0x00000010,
++    0x00000053, 0x00000051, 0x00000052, 0x00050084, 0x00000010, 0x00000054, 0x00000045, 0x00000053,
++    0x00050080, 0x00000010, 0x00000056, 0x00000054, 0x00000055, 0x000500c2, 0x00000006, 0x00000059,
++    0x0000002d, 0x0000003b, 0x00050041, 0x00000033, 0x0000005b, 0x00000032, 0x0000005a, 0x0004003d,
++    0x00000006, 0x0000005c, 0x0000005b, 0x00050084, 0x00000006, 0x0000005d, 0x00000059, 0x0000005c,
++    0x000500c2, 0x00000006, 0x0000005f, 0x00000029, 0x0000003b, 0x00050041, 0x00000033, 0x00000061,
++    0x00000032, 0x00000060, 0x0004003d, 0x00000006, 0x00000062, 0x00000061, 0x00050084, 0x00000006,
++    0x00000063, 0x0000005f, 0x00000062, 0x00050080, 0x00000006, 0x00000064, 0x0000005d, 0x00000063,
++    0x00050041, 0x00000033, 0x00000067, 0x00000032, 0x00000066, 0x0004003d, 0x00000006, 0x00000068,
++    0x00000067, 0x00050080, 0x00000006, 0x0000006a, 0x00000068, 0x00000064, 0x000500c2, 0x00000006,
++    0x000000c4, 0x0000006a, 0x00000013, 0x00060041, 0x00000015, 0x000000c5, 0x0000000f, 0x00000011,
++    0x000000c4, 0x0004003d, 0x00000006, 0x000000c6, 0x000000c5, 0x000500c7, 0x00000006, 0x000000c8,
++    0x0000006a, 0x00000019, 0x000500c4, 0x00000006, 0x000000c9, 0x000000c8, 0x0000001b, 0x000500c2,
++    0x00000006, 0x000000ca, 0x000000c6, 0x000000c9, 0x000500c7, 0x00000006, 0x000000cb, 0x000000ca,
++    0x0000001e, 0x0004007c, 0x00000010, 0x0000006d, 0x000000cb, 0x00050082, 0x00000010, 0x0000006e,
++    0x0000006d, 0x00000055, 0x00050041, 0x00000033, 0x00000071, 0x00000032, 0x00000070, 0x0004003d,
++    0x00000006, 0x00000072, 0x00000071, 0x00050080, 0x00000006, 0x00000074, 0x00000072, 0x00000064,
++    0x000500c2, 0x00000006, 0x000000cf, 0x00000074, 0x00000013, 0x00060041, 0x00000015, 0x000000d0,
++    0x0000000f, 0x00000011, 0x000000cf, 0x0004003d, 0x00000006, 0x000000d1, 0x000000d0, 0x000500c7,
++    0x00000006, 0x000000d3, 0x00000074, 0x00000019, 0x000500c4, 0x00000006, 0x000000d4, 0x000000d3,
++    0x0000001b, 0x000500c2, 0x00000006, 0x000000d5, 0x000000d1, 0x000000d4, 0x000500c7, 0x00000006,
++    0x000000d6, 0x000000d5, 0x0000001e, 0x0004007c, 0x00000010, 0x00000077, 0x000000d6, 0x00050082,
++    0x00000010, 0x00000078, 0x00000077, 0x00000055, 0x00050084, 0x00000010, 0x0000007d, 0x0000007b,
++    0x00000078, 0x00050080, 0x00000010, 0x0000007e, 0x00000056, 0x0000007d, 0x000500c3, 0x00000010,
++    0x00000080, 0x0000007e, 0x0000007f, 0x0008000c, 0x00000010, 0x00000082, 0x00000001, 0x0000002d,
++    0x00000080, 0x00000011, 0x00000081, 0x0004007c, 0x00000006, 0x00000083, 0x00000082, 0x00050084,
++    0x00000010, 0x00000088, 0x00000086, 0x0000006e, 0x00050082, 0x00000010, 0x00000089, 0x00000056,
++    0x00000088, 0x00050084, 0x00000010, 0x0000008c, 0x0000008a, 0x00000078, 0x00050082, 0x00000010,
++    0x0000008d, 0x00000089, 0x0000008c, 0x000500c3, 0x00000010, 0x0000008e, 0x0000008d, 0x0000007f,
++    0x0008000c, 0x00000010, 0x0000008f, 0x00000001, 0x0000002d, 0x0000008e, 0x00000011, 0x00000081,
++    0x0004007c, 0x00000006, 0x00000090, 0x0000008f, 0x00050084, 0x00000010, 0x00000095, 0x00000093,
++    0x0000006e, 0x00050080, 0x00000010, 0x00000096, 0x00000056, 0x00000095, 0x000500c3, 0x00000010,
++    0x00000097, 0x00000096, 0x0000007f, 0x0008000c, 0x00000010, 0x00000098, 0x00000001, 0x0000002d,
++    0x00000097, 0x00000011, 0x00000081, 0x0004007c, 0x00000006, 0x00000099, 0x00000098, 0x00050084,
++    0x00000006, 0x000000a1, 0x0000002d, 0x00000035, 0x00050080, 0x00000006, 0x000000a3, 0x000000a1,
++    0x00000029, 0x000500c4, 0x00000006, 0x000000a6, 0x00000090, 0x0000007f, 0x000500c5, 0x00000006,
++    0x000000a7, 0x00000083, 0x000000a6, 0x000500c4, 0x00000006, 0x000000a9, 0x00000099, 0x00000052,
++    0x000500c5, 0x00000006, 0x000000aa, 0x000000a7, 0x000000a9, 0x000500c5, 0x00000006, 0x000000ac,
++    0x000000aa, 0x000000ab, 0x00060041, 0x00000015, 0x000000ad, 0x0000009d, 0x00000011, 0x000000a3,
++    0x0003003e, 0x000000ad, 0x000000ac, 0x000200f9, 0x000000b0, 0x000200f8, 0x000000b0, 0x000100fd,
++    0x00010038,
++];
++
++// ika: the push constants of YUV420_TO_RGBA_SPIRV for a buffer in the layout
++// the guest was given.
++fn yuv420_params(format: DrmFormat, width: u32, height: u32, layout: &ImageMemoryRequirements) -> [u32; 8] {
++    let nv12 = format.to_bytes() == DRM_FORMAT_NV12;
++    let (u_offset, v_offset, c_step) = if nv12 {
++        (layout.offsets[1], layout.offsets[1] + 1, 2)
++    } else {
++        // YVU420 (YV12): the V plane comes before the U plane.
++        (layout.offsets[2], layout.offsets[1], 1)
++    };
++    [
++        width,
++        height,
++        layout.offsets[0],
++        layout.strides[0],
++        u_offset,
++        v_offset,
++        layout.strides[1],
++        c_step,
++    ]
++}
++
++// ika: converts rows `y0..y1` and columns `x0..x1` of a 4:2:0 YUV buffer, in
++// the layout the guest was given (`layout`: canonical_image_requirements), to
++// RGBA8 rows of `stride` bytes in `dst`, with the BT.601 limited-range matrix
++// gfxstream uses for the same buffers (PATCH.gfxstream.yuv-rgba-fallback.patch),
++// so both GPU modes show a video in the same colors. YVU420 (YV12) has its V
++// plane before its U plane; NV12 interleaves U then V.
++#[allow(clippy::too_many_arguments)]
++fn convert_yuv420_to_rgba(
++    format: DrmFormat,
++    layout: &ImageMemoryRequirements,
++    src: &[u8],
++    dst: &mut [u8],
++    stride: usize,
++    (x0, x1): (usize, usize),
++    (y0, y1): (usize, usize),
++) -> RutabagaResult<()> {
++    let nv12 = format.to_bytes() == DRM_FORMAT_NV12;
++    if src.len() < layout.size as usize {
++        return Err(MagmaGpuError::WithContext("YUV buffer smaller than its layout").into());
++    }
++    let y_plane = &src[layout.offsets[0] as usize..];
++    let y_stride = layout.strides[0] as usize;
++    let (u_plane, v_plane, chroma_stride, chroma_step) = if nv12 {
++        let uv = &src[layout.offsets[1] as usize..];
++        (uv, &uv[1..], layout.strides[1] as usize, 2)
++    } else {
++        (
++            &src[layout.offsets[2] as usize..],
++            &src[layout.offsets[1] as usize..],
++            layout.strides[1] as usize,
++            1,
++        )
++    };
++    let clamp = |v: i32| v.clamp(0, 255) as u8;
++    for y in y0..y1 {
++        let y_row = &y_plane[y * y_stride..];
++        let u_row = &u_plane[(y / 2) * chroma_stride..];
++        let v_row = &v_plane[(y / 2) * chroma_stride..];
++        let out = &mut dst[y * stride..];
++        for x in x0..x1 {
++            let c = 298 * (y_row[x] as i32 - 16) + 128;
++            let d = u_row[(x / 2) * chroma_step] as i32 - 128;
++            let e = v_row[(x / 2) * chroma_step] as i32 - 128;
++            let px = &mut out[x * 4..x * 4 + 4];
++            px[0] = clamp((c + 409 * e) >> 8);
++            px[1] = clamp((c - 100 * d - 208 * e) >> 8);
++            px[2] = clamp((c + 516 * d) >> 8);
++            px[3] = 0xff;
++        }
++    }
++    Ok(())
+ }
+ 
+ struct VulkanoMapping {
+@@ -385,6 +609,8 @@ impl VulkanoGralloc {
+             readback_command_allocator: None,
+             readbacks: Default::default(),
+             device_lost: false,
++            yuv_pipeline: None,
++            descriptor_set_allocator: None,
+         }))
+     }
+ 
+@@ -395,6 +621,30 @@ impl VulkanoGralloc {
+         !device.enabled_extensions().ext_external_memory_dma_buf
+     }
+ 
++    // ika: the format of the optimal image for a buffer of this DRM format. A
++    // 4:2:0 YUV buffer, such as a software video decoder's YV12 frame, is an
++    // RGBA8 image where the device cannot sample the YUV format (Dozen: D3D12
++    // has no three-plane format, and Dozen samples no NV12): its guest bytes
++    // are converted on upload, as gfxstream does for the same buffers. Ika's
++    // Dozen layer (src/tools/wsl/ika_dzn_fix.c, item 8) makes the image an
++    // app's Venus driver imports for it RGBA8 too, by the same rule.
++    fn optimal_image_format(
++        device: &Device,
++        drm_format: DrmFormat,
++    ) -> RutabagaResult<(vulkano::format::Format, Option<DrmFormat>)> {
++        let format = drm_format.vulkan_format()?;
++        if drm_format.planar_layout()?.num_planes == 1 {
++            return Ok((format, None));
++        }
++        // SAFETY: the format is a valid Vulkan format.
++        let features =
++            unsafe { device.physical_device().format_properties_unchecked(format) }.optimal_tiling_features;
++        if features.intersects(vulkano::format::FormatFeatures::SAMPLED_IMAGE) {
++            return Ok((format, None));
++        }
++        Ok((vulkano::format::Format::R8G8B8A8_UNORM, Some(drm_format)))
++    }
++
+     // ika: one create info for an optimal image of this size and format,
+     // whoever creates it: the allocation, a readback here, and the guest's
+     // Venus driver importing it must agree. The usage is everything Android
+@@ -467,11 +717,12 @@ impl VulkanoGralloc {
+             .get(&vulkan_info.device_id)
+             .ok_or(RutabagaError::InvalidVulkanInfo)?
+             .clone();
+-        if info.drm_format.planar_layout()?.num_planes != 1 {
++        // ika: a YUV buffer kept as RGBA8 is uploaded; any other YUV image
++        // has no single-plane copy.
++        let (format, yuv) = Self::optimal_image_format(&device, info.drm_format)?;
++        if yuv.is_none() && info.drm_format.planar_layout()?.num_planes != 1 {
+             return Err(MagmaGpuError::Unsupported.into());
+         }
+-
+-        let format = info.drm_format.vulkan_format()?;
+         let create_info = Self::optimal_image_create_info(&device, info.width, info.height, format)?;
+         let raw_image = image::sys::RawImage::new(device.clone(), create_info)?;
+ 
+@@ -500,8 +751,17 @@ impl VulkanoGralloc {
+             .map_err(|_| MagmaGpuError::WithContext("readback: memory allocation object"))?;
+         let image = raw_image.bind_memory([allocation]).map_err(|(e, _, _)| e)?;
+ 
+-        let stride = canonical_image_requirements(info)?.strides[0];
+-        let bytes_per_pixel = stride / info.width;
++        let bytes_per_pixel = match yuv {
++            Some(_) => 4,
++            None => canonical_image_requirements(info)?.strides[0] / info.width,
++        };
++        let stride = bytes_per_pixel * info.width;
++        // ika: a YUV buffer kept as RGBA8 is converted by the GPU where it can
++        // run the YUV pipeline: its RGBA8 pixels then stay in device memory.
++        let pipeline = match yuv {
++            Some(_) => self.yuv_pipeline(&device),
++            None => None,
++        };
+         let allocator = self
+             .readback_memory_allocator
+             .get_or_insert_with(|| Arc::new(StandardMemoryAllocator::new_default(device.clone())))
+@@ -509,11 +769,17 @@ impl VulkanoGralloc {
+         let buffer = Buffer::new_slice::<u8>(
+             allocator.as_ref(),
+             BufferCreateInfo {
+-                usage: BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
++                usage: match pipeline {
++                    Some(_) => BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC,
++                    None => BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
++                },
+                 ..Default::default()
+             },
+             AllocationCreateInfo {
+-                usage: MemoryUsage::Download,
++                usage: match pipeline {
++                    Some(_) => MemoryUsage::DeviceOnly,
++                    None => MemoryUsage::Download,
++                },
+                 ..Default::default()
+             },
+             stride as u64 * info.height as u64,
+@@ -523,15 +789,87 @@ impl VulkanoGralloc {
+             MagmaGpuError::WithContext("readback: buffer")
+         })?;
+ 
++        let (yuv_src, yuv_set) = match pipeline {
++            Some(pipeline) => {
++                // The shader reads whole 32-bit words.
++                let size = (canonical_image_requirements(info)?.size + 3) & !3;
++                let src = Buffer::new_slice::<u8>(
++                    allocator.as_ref(),
++                    BufferCreateInfo {
++                        usage: BufferUsage::STORAGE_BUFFER,
++                        ..Default::default()
++                    },
++                    AllocationCreateInfo {
++                        usage: MemoryUsage::Upload,
++                        ..Default::default()
++                    },
++                    size,
++                )
++                .map_err(|e| {
++                    warn!("YUV upload buffer: {}", e);
++                    MagmaGpuError::WithContext("readback: YUV buffer")
++                })?;
++                let set_allocator = self
++                    .descriptor_set_allocator
++                    .get_or_insert_with(|| StandardDescriptorSetAllocator::new(device.clone()));
++                let set = PersistentDescriptorSet::new(
++                    set_allocator,
++                    pipeline.layout().set_layouts()[0].clone(),
++                    [
++                        WriteDescriptorSet::buffer(0, src.clone()),
++                        WriteDescriptorSet::buffer(1, buffer.clone()),
++                    ],
++                )
++                .map_err(|e| {
++                    warn!("YUV descriptor set: {}", e);
++                    MagmaGpuError::WithContext("readback: YUV descriptor set")
++                })?;
++                (Some(src), Some(set))
++            }
++            None => (None, None),
++        };
++
+         Ok(Readback {
+             image: Arc::new(ExternalImage {
+                 image: Arc::new(image),
+             }),
+             buffer,
+             bytes_per_pixel,
++            yuv,
++            yuv_src,
++            yuv_set,
+         })
+     }
+ 
++    // ika: the YUV conversion pipeline (YUV420_TO_RGBA_SPIRV), created at its
++    // first use. Where the device cannot create it, the CPU converts.
++    fn yuv_pipeline(&mut self, device: &Arc<Device>) -> Option<Arc<ComputePipeline>> {
++        if let Some(pipeline) = &self.yuv_pipeline {
++            return pipeline.clone();
++        }
++        // SAFETY: the words are a SPIR-V module validated for Vulkan 1.1.
++        let module = unsafe { ShaderModule::from_words(device.clone(), &YUV420_TO_RGBA_SPIRV) };
++        let pipeline = match module {
++            Ok(module) => match module.entry_point("main") {
++                Some(entry_point) => {
++                    ComputePipeline::new(device.clone(), entry_point, &(), None, |_| {})
++                        .map_err(|e| warn!("YUV pipeline: {}", e))
++                        .ok()
++                }
++                None => None,
++            },
++            Err(e) => {
++                warn!("YUV shader: {}", e);
++                None
++            }
++        };
++        if pipeline.is_none() {
++            warn!("YUV buffers are converted on the CPU");
++        }
++        self.yuv_pipeline = Some(pipeline.clone());
++        pipeline
++    }
++
+     // This function is used safely in this module because gralloc does not:
+     //
+     //  (1) bind images to any memory.
+@@ -571,8 +909,9 @@ impl VulkanoGralloc {
+ 
+         let vulkan_format = info.drm_format.vulkan_format()?;
+         if Self::uses_optimal_images(device) {
++            let (optimal_format, _) = Self::optimal_image_format(device, info.drm_format)?;
+             let create_info =
+-                Self::optimal_image_create_info(device, info.width, info.height, vulkan_format)?;
++                Self::optimal_image_create_info(device, info.width, info.height, optimal_format)?;
+             let raw_image = Arc::new(image::sys::RawImage::new(device.clone(), create_info)?);
+             let memory_requirements = raw_image.memory_requirements()[0];
+             return Ok((raw_image, memory_requirements));
+@@ -920,6 +1259,39 @@ impl Gralloc for VulkanoGralloc {
+         size: u64,
+         transfer: Transfer3D,
+         dst: &mut [u8],
++    ) -> RutabagaResult<()> {
++        let bpp = (canonical_image_requirements(info)?.strides[0] / info.width) as usize;
++        let src_stride = info.width as usize * bpp;
++        let dst_stride = if transfer.stride != 0 {
++            transfer.stride as usize
++        } else {
++            src_stride
++        };
++        let x = (transfer.x as usize).min(info.width as usize);
++        let w = (transfer.w as usize).min(info.width as usize - x);
++        let y = (transfer.y as usize).min(info.height as usize);
++        let h = (transfer.h as usize).min(info.height as usize - y);
++        self.read_image_into(id, handle, vulkan_info, info, size, &mut |src| {
++            for row in y..y + h {
++                let src_start = row * src_stride + x * bpp;
++                let dst_start = transfer.offset as usize + row * dst_stride + x * bpp;
++                if dst_start + w * bpp > dst.len() {
++                    break;
++                }
++                dst[dst_start..dst_start + w * bpp]
++                    .copy_from_slice(&src[src_start..src_start + w * bpp]);
++            }
++        })
++    }
++
++    fn read_image_into(
++        &mut self,
++        id: u32,
++        handle: &MagmaGpuHandle,
++        vulkan_info: VulkanInfo,
++        info: ImageAllocationInfo,
++        size: u64,
++        sink: &mut dyn FnMut(&[u8]),
+     ) -> RutabagaResult<()> {
+         if self.device_lost {
+             return Err(MagmaGpuError::WithContext("device lost").into());
+@@ -943,6 +1315,10 @@ impl Gralloc for VulkanoGralloc {
+             .readback_command_allocator
+             .get_or_insert_with(|| StandardCommandBufferAllocator::new(device, Default::default()));
+         let readback = &self.readbacks[&id];
++        // ika: the RGBA8 image of a YUV buffer has no YUV pixels to give back.
++        if readback.yuv.is_some() {
++            return Err(MagmaGpuError::Unsupported.into());
++        }
+ 
+         let fail = |what: &'static str| {
+             move |e: &dyn std::fmt::Display| {
+@@ -965,28 +1341,9 @@ impl Gralloc for VulkanoGralloc {
+         let command_buffer = builder.build().map_err(|e| fail("build")(&e))?;
+         submit_and_wait(&queue, Arc::new(command_buffer), &mut self.device_lost, "readback")?;
+ 
++        // ika: the caller copies what it needs from the mapped pixels.
+         let src = readback.buffer.read().map_err(|e| fail("read")(&e))?;
+-        let bpp = readback.bytes_per_pixel as usize;
+-        let src_stride = info.width as usize * bpp;
+-        let dst_stride = if transfer.stride != 0 {
+-            transfer.stride as usize
+-        } else {
+-            src_stride
+-        };
+-        let x = (transfer.x as usize).min(info.width as usize);
+-        let w = (transfer.w as usize).min(info.width as usize - x);
+-        let y = (transfer.y as usize).min(info.height as usize);
+-        let h = (transfer.h as usize).min(info.height as usize - y);
+-        for row in y..y + h {
+-            let src_start = row * src_stride + x * bpp;
+-            let dst_start = transfer.offset as usize + row * dst_stride + x * bpp;
+-            if dst_start + w * bpp > dst.len() {
+-                break;
+-            }
+-            dst[dst_start..dst_start + w * bpp]
+-                .copy_from_slice(&src[src_start..src_start + w * bpp]);
+-        }
+-
++        sink(&src[..]);
+         Ok(())
+     }
+ 
+@@ -1032,14 +1389,42 @@ impl Gralloc for VulkanoGralloc {
+         };
+         let bpp = readback.bytes_per_pixel as usize;
+         let stride = info.width as usize * bpp;
+-        let x = (transfer.x as usize).min(info.width as usize);
+-        let w = (transfer.w as usize).min(info.width as usize - x);
+-        let y = (transfer.y as usize).min(info.height as usize);
+-        let h = (transfer.h as usize).min(info.height as usize - y);
++        let mut x = (transfer.x as usize).min(info.width as usize);
++        let mut w = (transfer.w as usize).min(info.width as usize - x);
++        let mut y = (transfer.y as usize).min(info.height as usize);
++        let mut h = (transfer.h as usize).min(info.height as usize - y);
+         if w == 0 || h == 0 {
+             return Ok(());
+         }
+-        {
++        let mut gpu_yuv = None;
++        if let Some(format) = readback.yuv {
++            // ika: `src` holds the guest's YUV bytes in the layout it was
++            // given. A chroma sample covers 2x2 pixels: convert whole pairs.
++            let x1 = ((x + w + 1) & !1).min(info.width as usize);
++            let y1 = ((y + h + 1) & !1).min(info.height as usize);
++            x &= !1;
++            y &= !1;
++            w = x1.max(x) - x;
++            h = y1.max(y) - y;
++            if w == 0 || h == 0 {
++                return Ok(());
++            }
++            let layout = canonical_image_requirements(info)?;
++            if let Some(yuv_src) = &readback.yuv_src {
++                // The GPU converts (see below): it only needs the YUV bytes,
++                // which write_image_from has put in place when `src` is empty.
++                if !src.is_empty() {
++                    let mut dst = yuv_src.write().map_err(|e| fail("map")(&e))?;
++                    let n = src.len().min(dst.len());
++                    dst[..n].copy_from_slice(&src[..n]);
++                }
++                gpu_yuv = Some(yuv420_params(format, info.width, info.height, &layout));
++            } else {
++                let mut dst = readback.buffer.write().map_err(|e| fail("map")(&e))?;
++                convert_yuv420_to_rgba(format, &layout, src, &mut dst[..], stride, (x, x + w), (y, y + h))?;
++            }
++        } else if !src.is_empty() {
++            // ika: an empty `src` means write_image_from put the rows in place.
+             let mut dst = readback.buffer.write().map_err(|e| fail("map")(&e))?;
+             for row in y..y + h {
+                 let src_start = row * src_stride + x * bpp;
+@@ -1058,6 +1443,26 @@ impl Gralloc for VulkanoGralloc {
+             CommandBufferUsage::OneTimeSubmit,
+         )
+         .map_err(|e| fail("command buffer")(&e))?;
++        // ika: the YUV pipeline converts the whole frame into `buffer`, from
++        // which the rows the transfer covers are copied as below.
++        if let (Some(params), Some(set), Some(pipeline)) = (
++            gpu_yuv,
++            readback.yuv_set.as_ref(),
++            self.yuv_pipeline.clone().flatten(),
++        ) {
++            builder
++                .bind_pipeline_compute(pipeline.clone())
++                .bind_descriptor_sets(
++                    PipelineBindPoint::Compute,
++                    pipeline.layout().clone(),
++                    0,
++                    set.clone(),
++                )
++                .push_constants(pipeline.layout().clone(), 0, params);
++            builder
++                .dispatch([(info.width + 63) / 64, info.height, 1])
++                .map_err(|e| fail("convert")(&e))?;
++        }
+         builder
+             .copy_buffer_to_image(CopyBufferToImageInfo {
+                 regions: [BufferImageCopy {
+@@ -1082,6 +1487,46 @@ impl Gralloc for VulkanoGralloc {
+         Ok(())
+     }
+ 
++    fn write_image_from(
++        &mut self,
++        id: u32,
++        handle: &MagmaGpuHandle,
++        vulkan_info: VulkanInfo,
++        info: ImageAllocationInfo,
++        size: u64,
++        transfer: Transfer3D,
++        fill: &mut dyn FnMut(&mut [u8]),
++    ) -> RutabagaResult<()> {
++        if self.device_lost {
++            return Err(MagmaGpuError::WithContext("device lost").into());
++        }
++        if !self.readbacks.contains_key(&id) {
++            let readback = self.import_for_readback(handle, vulkan_info, info, size)?;
++            self.readbacks.insert(id, readback);
++        }
++        // ika: the guest's bytes go straight into the buffer the GPU uploads
++        // from: the YUV pipeline's input, or the buffer an RGBA image is
++        // copied from, laid out as the guest's copy.
++        let readback = &self.readbacks[&id];
++        let target = match readback.yuv {
++            Some(_) => readback.yuv_src.clone(),
++            None => Some(readback.buffer.clone()),
++        };
++        if let Some(target) = target {
++            {
++                let mut dst = target.write().map_err(|e| {
++                    warn!("upload map: {}", e);
++                    RutabagaError::from(MagmaGpuError::WithContext("map"))
++                })?;
++                fill(&mut dst[..]);
++            }
++            return self.write_image(id, handle, vulkan_info, info, size, transfer, &[], 0);
++        }
++        let mut bytes = vec![0u8; canonical_image_requirements(info)?.size as usize];
++        fill(&mut bytes);
++        self.write_image(id, handle, vulkan_info, info, size, transfer, &bytes, 0)
++    }
++
+     fn exit_if_device_lost(&self, what: &str) {
+         for device in self.devices.values() {
+             if device_is_lost(device) {
