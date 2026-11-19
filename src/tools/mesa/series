@@ -41,3 +41,4 @@ dzn-storage-buffer-byte-views.patch
 dzn-flatten-buffer-workgroups.patch
 dzn-queue-family-foreign.patch
 dzn-bc3-emulation.patch
+dzn-depth-stencil-aspects.patch

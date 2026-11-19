@@ -521,6 +521,15 @@ Those drivers load such texels about ten times slower than integer ones, and
 in some formats, such as R8G8B8A8_SNORM and R16_UNORM, load zeros. Shaders
 that read an image without declaring its format still use the first view.
 
+Ika's Dozen names in its barriers and clears only the depth and stencil
+planes an image has
+([dzn-depth-stencil-aspects.patch](src/tools/mesa/dzn-depth-stencil-aspects.patch)).
+Apps name stencil for a depth-only image, which other Vulkan drivers ignore;
+Dozen passed it on, Direct3D 12 refused to close the command list, and
+running the list removed the device. Destiny Rising clears its 32-bit depth
+shadow map that way, and crashed while loading, with every other app drawing
+with the GPU.
+
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window

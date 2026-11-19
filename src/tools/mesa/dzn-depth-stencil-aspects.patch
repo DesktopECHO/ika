@@ -1,0 +1,175 @@
+dzn: Only name the depth and stencil planes an image has
+
+Applications name stencil for a depth-only image, or depth for a
+stencil-only one, in barriers and clears, which other Vulkan drivers ignore.
+Dozen made planes and clear flags of whatever aspects the application
+named. A barrier on the second plane of a single-plane texture is not a
+valid D3D12 subresource range: D3D12 refused to close the command list
+(E_INVALIDARG), and executing it removed the device
+(DXGI_ERROR_INVALID_CALL). Destiny Rising clears its D32_SFLOAT shadow map
+with both aspects, so under WSL2 it crashed 18 to 35 s after every launch,
+in Venus and gfxstream_guest_angle mode alike, and took every other app
+drawing with the GPU, or in gfxstream mode the whole VM, with it.
+
+dzn_image_aspects() keeps the depth and stencil aspects the image's format
+has. The internal barriers before clears and loads, vkCmdPipelineBarrier2
+(in its counting pass as in the one that fills the barriers, so the two
+agree), the legacy barrier path and the depth/stencil clears use it, and
+skip a barrier or a clear left with nothing. A stencil-only barrier from
+vkCmdPipelineBarrier2 now names plane 1, as the internal ones do, instead
+of the depth plane.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index e102698..12d98f6 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -182,6 +182,19 @@ dzn_cmd_buffer_queue_image_subres_transition(struct dzn_cmd_buffer *cmdbuf,
+                                                    before, after, flags);
+ }
+ 
++/* The aspects of mask that image's format has. Applications name stencil
++ * for a depth-only image (or depth for a stencil-only one), which other
++ * Vulkan drivers ignore. D3D12 rejects a barrier or a clear for a plane the
++ * resource lacks: the command list then fails to close, and submitting it
++ * removes the device. */
++static VkImageAspectFlags
++dzn_image_aspects(const struct dzn_image *image, VkImageAspectFlags mask)
++{
++   if (!(mask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)))
++      return mask;
++   return mask & vk_format_aspects(image->vk.format);
++}
++
+ static VkResult
+ dzn_cmd_buffer_queue_image_range_state_transition(struct dzn_cmd_buffer *cmdbuf,
+                                                   const struct dzn_image *image,
+@@ -194,7 +207,7 @@ dzn_cmd_buffer_queue_image_range_state_transition(struct dzn_cmd_buffer *cmdbuf,
+    uint32_t first_barrier = 0, barrier_count = 0;
+    VkResult ret = VK_SUCCESS;
+ 
+-   dzn_foreach_aspect(aspect, range->aspectMask) {
++   dzn_foreach_aspect(aspect, dzn_image_aspects(image, range->aspectMask)) {
+       uint32_t layer_count = dzn_get_barrier_layer_count(image, range);
+       uint32_t level_count = dzn_get_level_count(image, range);
+       for (uint32_t layer = 0; layer < layer_count; layer++) {
+@@ -256,7 +269,7 @@ dzn_cmd_buffer_queue_image_range_layout_transition(struct dzn_cmd_buffer *cmdbuf
+                             D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) &&
+       !(instance->debug_flags & DZN_DEBUG_NO_DISCARD);
+ 
+-   dzn_foreach_aspect(aspect, range->aspectMask) {
++   dzn_foreach_aspect(aspect, dzn_image_aspects(image, range->aspectMask)) {
+       D3D12_RESOURCE_STATES after =
+          dzn_image_layout_to_state(image, new_layout, aspect, cmdbuf->type);
+       D3D12_RESOURCE_STATES before =
+@@ -348,6 +361,21 @@ dzn_cmd_buffer_buffer_barrier(struct dzn_cmd_buffer *cmdbuf,
+    ID3D12GraphicsCommandList8_Barrier(cmdbuf->cmdlist8, 1, &group);
+ }
+ 
++/* Whether an image barrier is split into a depth and a stencil barrier: a
++ * layout that differs between the two, on an image that has both. */
++static bool
++dzn_image_barrier_separate_aspects(const struct dzn_image *image,
++                                   const VkImageMemoryBarrier2 *barrier)
++{
++   const VkImageAspectFlags both = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
++   if ((dzn_image_aspects(image, barrier->subresourceRange.aspectMask) & both) != both)
++      return false;
++   return barrier->oldLayout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL ||
++          barrier->oldLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL ||
++          barrier->newLayout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL ||
++          barrier->newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL;
++}
++
+ static void
+ dzn_cmd_buffer_image_barrier(struct dzn_cmd_buffer *cmdbuf,
+                              const struct dzn_image *image,
+@@ -360,8 +388,11 @@ dzn_cmd_buffer_image_barrier(struct dzn_cmd_buffer *cmdbuf,
+                              const VkImageSubresourceRange *range)
+ {
+    assert(cmdbuf->enhanced_barriers);
+-   uint32_t first_plane = (range->aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT) ? 1 : 0;
+-   uint32_t plane_count = first_plane == 0 && (range->aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) ? 2 : 1;
++   VkImageAspectFlags aspects = dzn_image_aspects(image, range->aspectMask);
++   if (!aspects)
++      return;
++   uint32_t first_plane = (aspects == VK_IMAGE_ASPECT_STENCIL_BIT) ? 1 : 0;
++   uint32_t plane_count = first_plane == 0 && (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) ? 2 : 1;
+    uint32_t image_planes =
+       vk_format_has_depth(image->vk.format) && vk_format_has_stencil(image->vk.format) ? 2 : 1;
+    const struct dzn_instance *instance =
+@@ -1665,15 +1696,10 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
+    uint32_t num_buffer_barriers = info->bufferMemoryBarrierCount;
+    for (uint32_t i = 0; i < info->imageMemoryBarrierCount; ++i) {
+       VK_FROM_HANDLE(dzn_image, image, info->pImageMemoryBarriers[i].image);
+-      bool need_separate_aspect_barriers =
+-         info->pImageMemoryBarriers[i].oldLayout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL ||
+-         info->pImageMemoryBarriers[i].oldLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL ||
+-         info->pImageMemoryBarriers[i].newLayout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL ||
+-         info->pImageMemoryBarriers[i].newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL;
+       if (image->vk.tiling == VK_IMAGE_TILING_LINEAR)
+          ++num_buffer_barriers;
+-      else
+-         num_image_barriers += need_separate_aspect_barriers ? 2 : 1;
++      else if (dzn_image_aspects(image, info->pImageMemoryBarriers[i].subresourceRange.aspectMask))
++         num_image_barriers += dzn_image_barrier_separate_aspects(image, &info->pImageMemoryBarriers[i]) ? 2 : 1;
+    }
+ 
+    VK_MULTIALLOC(ma);
+@@ -1777,18 +1803,18 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
+ 
+       const VkImageSubresourceRange *range = &info->pImageMemoryBarriers[i].subresourceRange;
+       const bool simultaneous_access = image->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
++      const VkImageAspectFlags range_aspects = dzn_image_aspects(image, range->aspectMask);
++      if (!range_aspects)
++         continue;
+ 
+       bool need_separate_aspect_barriers =
+-         info->pImageMemoryBarriers[i].oldLayout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL ||
+-         info->pImageMemoryBarriers[i].oldLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL ||
+-         info->pImageMemoryBarriers[i].newLayout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL ||
+-         info->pImageMemoryBarriers[i].newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL;
++         dzn_image_barrier_separate_aspects(image, &info->pImageMemoryBarriers[i]);
+       uint32_t num_aspects = need_separate_aspect_barriers ? 2 : 1;
+       VkImageAspectFlags aspect_0_mask = need_separate_aspect_barriers ?
+          (VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT) : VK_IMAGE_ASPECT_FLAG_BITS_MAX_ENUM;
+       VkImageAspectFlags aspects[] = {
+-         range->aspectMask & aspect_0_mask,
+-         range->aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT,
++         range_aspects & aspect_0_mask,
++         range_aspects & VK_IMAGE_ASPECT_STENCIL_BIT,
+       };
+ 
+       for (uint32_t aspect_idx = 0; aspect_idx < num_aspects; ++aspect_idx) {
+@@ -1852,7 +1878,7 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
+          texture_barriers[tbar].Subresources.NumArraySlices = dzn_get_barrier_layer_count(image, range);
+          texture_barriers[tbar].Subresources.IndexOrFirstMipLevel = range->baseMipLevel;
+          texture_barriers[tbar].Subresources.NumMipLevels = dzn_get_level_count(image, range);
+-         texture_barriers[tbar].Subresources.FirstPlane = aspect_idx;
++         texture_barriers[tbar].Subresources.FirstPlane = aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 : 0;
+          texture_barriers[tbar].Subresources.NumPlanes = util_bitcount(aspect);
+          texture_barriers[tbar].pResource = image->res;
+          texture_barriers[tbar].Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
+@@ -2659,6 +2685,7 @@ dzn_cmd_buffer_clear_attachment(struct dzn_cmd_buffer *cmdbuf,
+    struct dzn_physical_device *pdev =
+       container_of(cmdbuf->vk.base.device->physical, struct dzn_physical_device, vk);
+ 
++   aspects = dzn_image_aspects(image, aspects);
+    VkImageSubresourceRange range = {
+       .aspectMask = aspects,
+       .baseMipLevel = view->vk.base_mip_level,
+@@ -2873,10 +2900,13 @@ dzn_cmd_buffer_clear_zs(struct dzn_cmd_buffer *cmdbuf,
+       D3D12_CLEAR_FLAGS flags = (D3D12_CLEAR_FLAGS)0;
+       D3D12_BARRIER_LAYOUT restore_layout = D3D12_BARRIER_LAYOUT_COMMON;
+ 
+-      if (range->aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT)
++      VkImageAspectFlags aspects = dzn_image_aspects(image, range->aspectMask);
++      if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+          flags |= D3D12_CLEAR_FLAG_DEPTH;
+-      if (range->aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT)
++      if (aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+          flags |= D3D12_CLEAR_FLAG_STENCIL;
++      if (!flags)
++         continue;
+ 
+       if (cmdbuf->enhanced_barriers) {
+          restore_layout = dzn_cmd_buffer_require_layout(cmdbuf, image,
