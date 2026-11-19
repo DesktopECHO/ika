@@ -23,11 +23,12 @@ $(LAYER): ika_dzn_fix.c
 
 # -z nodelete keeps the DRED watcher threads' code mapped after Mesa dlcloses
 # libd3d12.so.
-$(SHIM): d3d12_shim.c d3d12_dred.cpp
+$(SHIM): d3d12_shim.c d3d12_dred.cpp d3d12_cltrace.cpp
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -fvisibility=hidden -c -o $(BUILD)/d3d12_shim.o d3d12_shim.c
 	$(CXX) $(CPPFLAGS) $(CFLAGS) -fPIC -fvisibility=hidden -I/usr/include/wsl/stubs -c -o $(BUILD)/d3d12_dred.o d3d12_dred.cpp
-	$(CXX) $(LDFLAGS) -shared -fvisibility=hidden -Wl,-z,nodelete -o $@ $(BUILD)/d3d12_shim.o $(BUILD)/d3d12_dred.o -ldl -lpthread
+	$(CXX) $(CPPFLAGS) $(CFLAGS) -fPIC -fvisibility=hidden -I/usr/include/wsl/stubs -c -o $(BUILD)/d3d12_cltrace.o d3d12_cltrace.cpp
+	$(CXX) $(LDFLAGS) -shared -fvisibility=hidden -Wl,-z,nodelete -o $@ $(BUILD)/d3d12_shim.o $(BUILD)/d3d12_dred.o $(BUILD)/d3d12_cltrace.o -ldl -lpthread
 
 $(MANIFEST): VK_LAYER_IKA_dzn_fix.json.in
 	mkdir -p $(@D)

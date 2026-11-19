@@ -208,6 +208,9 @@ enum {
 static void *original[SLOT_COUNT_HOOKED];
 static volatile int call_reported;
 
+/* d3d12_cltrace.cpp, with IKA_D3D12_CLTRACE=1. */
+extern "C" void ika_cltrace_hook_device(void *device);
+
 /* ID3D12Resource::GetDesc, slot 10. On Linux the runtime follows the Itanium C++
  * ABI: the returned struct's address comes first, before this. */
 static void resource_desc(void *resource, D3D12_RESOURCE_DESC *desc) {
@@ -422,6 +425,7 @@ extern "C" void ika_dred_hook_device(void *device) {
     vtable[h.slot] = h.hook;
   }
   report("hooked D3D12 device vtable %p", (void *)vtable);
+  ika_cltrace_hook_device(device);
 }
 
 /* ---- Cross-device sharing self-test for the shim's device pool ----

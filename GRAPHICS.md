@@ -578,6 +578,7 @@ next frame, so its buttons did not highlight under the pointer.
 | `IKA_D3D12_SHIM_DISABLE=1` | The shim creates a device for each instance |
 | `IKA_D3D12_DRED=1` | The shim turns on D3D12's DRED. When the device is removed, it logs why, the GPU work in flight and the D3D12 call that removed it, to crosvm's log and `/tmp/ika-dred.log` |
 | `IKA_DZN_TRACE_REMOVAL=1` | With `IKA_D3D12_DRED=1`, the layer also logs the first Vulkan call after which the device was removed |
+| `IKA_D3D12_CLTRACE=1` | With `IKA_D3D12_DRED=1`, the shim records the D3D12 commands recorded into each command list. When D3D12 refuses to close a list, or running lists removes the device, it logs the list's last 256 commands and the details of its barriers. WSL2 has no D3D12 debug layer, which would otherwise name the rejected command |
 | `IKA_ASTC_DECODE=gpu` or `cpu` | gfxstream decodes ASTC textures on the GPU or on the CPU, on any host. Without it, the CPU on Dozen and the GPU elsewhere |
 | `DZN_DEBUG=nobc3emulation` | Dozen keeps emulated ASTC and ETC2 textures as RGBA8 instead of BC3 |
 
