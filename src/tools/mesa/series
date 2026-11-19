@@ -43,3 +43,4 @@ dzn-queue-family-foreign.patch
 dzn-bc3-emulation.patch
 dzn-depth-stencil-aspects.patch
 dzn-skip-failed-cmdbufs.patch
+dzn-input-attachment-simultaneous.patch

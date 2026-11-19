@@ -539,6 +539,16 @@ which submits the command buffer anyway: one invalid command took down every
 Android app drawing with the GPU, and in the `gfxstream` mode the whole VM.
 Now that command buffer's work is lost, and the device stays.
 
+Ika's Dozen creates a color image that is also an input attachment, unless
+its memory is imported or exported, as a simultaneous-access texture
+([dzn-input-attachment-simultaneous.patch](src/tools/mesa/dzn-input-attachment-simultaneous.patch)).
+Games such as Destiny Rising blend in the shader: a subpass reads, as an input
+attachment, the image it renders to. Direct3D 12 defines that read only for
+simultaneous-access textures; for others the shader can read stale or
+compressed data, and Destiny Rising's sky was black on a Radeon 780M. Such
+textures are never compressed, which costs some memory bandwidth when the
+game renders to them.
+
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window
