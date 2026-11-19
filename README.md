@@ -31,7 +31,7 @@ virtual machine.
 
 - A x86-64 (Sandy Bridge, 2011+) or Apple Silicon (M1/M2, 2020+) computer with hardware virtualization (KVM), and 4 GB of
   memory or more.
-- Fedora 44, Debian 13, Ubuntu 26.04 or Arch Linux.  Apple Silicon uses Asahi's 16 KB-page kernel.
+- Fedora 44 or 45, Debian 13, Ubuntu 26.04 or Arch Linux.  Apple Silicon uses Asahi's 16 KB-page kernel.
 - Mesa 26.1 or newer. Debian 13 gets it from
   [trixie-backports](https://backports.debian.org/Instructions/), Ubuntu from
   the [Kisak Mesa PPA](https://launchpad.net/~kisak/+archive/ubuntu/kisak-mesa);
