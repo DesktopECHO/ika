@@ -1,0 +1,66 @@
+dzn: Do not execute a command buffer whose recording failed
+
+When D3D12 refuses to close a command list, because a command recorded
+into it was invalid, vkEndCommandBuffer returns an error, but executing the
+list anyway removes the device, and every other user of the device loses it
+too. Venus does not pass vkEndCommandBuffer's result on to the application,
+which submits the command buffer anyway, so one invalid command took down
+every Android app drawing with the GPU.
+
+dzn_queue_submit leaves out command buffers whose recording failed and logs
+the first few ("not executing command buffer"). Their work is lost, as it
+would be on a device that rejected them, but the device stays. The
+submission's semaphores, fences and events are still signalled, so nothing
+waits for the work that was left out.
+
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 7a450cf..9b01ef9 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -21,6 +21,7 @@
+  * IN THE SOFTWARE.
+  */
+ 
++#include "util/u_atomic.h"
+ #include "dzn_private.h"
+ 
+ #include "vk_alloc.h"
+@@ -2296,12 +2297,27 @@ dzn_queue_submit(struct vk_queue *q,
+    }
+ 
+    ID3D12CommandList **cmdlists = alloca(info->command_buffer_count * sizeof(ID3D12CommandList*));
++   uint32_t cmdlist_count = 0;
+ 
+    for (uint32_t i = 0; i < info->command_buffer_count; i++) {
+       struct dzn_cmd_buffer *cmd_buffer =
+          container_of(info->command_buffers[i], struct dzn_cmd_buffer, vk);
+ 
+-      cmdlists[i] = (ID3D12CommandList *)cmd_buffer->cmdlist;
++      /* A command list D3D12 refused to close, because a command recorded
++       * into it was invalid, removes the device when it is executed, and
++       * every other user of the device loses it too. vkEndCommandBuffer
++       * returned the error, but Venus does not pass it on to the
++       * application, which submits the command buffer anyway. Leave it out:
++       * its work is lost, the device is not. */
++      if (cmd_buffer->vk.record_result != VK_SUCCESS) {
++         static uint32_t dropped;
++         if (p_atomic_inc_return(&dropped) <= 8)
++            mesa_loge("dzn: not executing command buffer %p, whose recording failed (VkResult %d)\n",
++                      (void *)cmd_buffer, cmd_buffer->vk.record_result);
++         continue;
++      }
++
++      cmdlists[cmdlist_count++] = (ID3D12CommandList *)cmd_buffer->cmdlist;
+ 
+       list_for_each_entry(struct dzn_cmd_buffer_gpu_work, work, &cmd_buffer->gpu_work, link) {
+          if (FAILED(ID3D12CommandQueue_Wait(queue->cmdqueue, work->fence, 1)))
+@@ -2322,7 +2338,8 @@ dzn_queue_submit(struct vk_queue *q,
+       }
+    }
+ 
+-   ID3D12CommandQueue_ExecuteCommandLists(queue->cmdqueue, info->command_buffer_count, cmdlists);
++   if (cmdlist_count)
++      ID3D12CommandQueue_ExecuteCommandLists(queue->cmdqueue, cmdlist_count, cmdlists);
+ 
+    for (uint32_t i = 0; i < info->command_buffer_count; i++) {
+       struct dzn_cmd_buffer* cmd_buffer =

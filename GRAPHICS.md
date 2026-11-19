@@ -530,6 +530,15 @@ running the list removed the device. Destiny Rising clears its 32-bit depth
 shadow map that way, and crashed while loading, with every other app drawing
 with the GPU.
 
+Ika's Dozen also leaves out a command buffer whose recording failed, and logs
+`dzn: not executing command buffer`
+([dzn-skip-failed-cmdbufs.patch](src/tools/mesa/dzn-skip-failed-cmdbufs.patch)).
+Direct3D 12 removes the device when it runs a command list it refused to
+close, and Venus does not pass `vkEndCommandBuffer`'s error on to the app,
+which submits the command buffer anyway: one invalid command took down every
+Android app drawing with the GPU, and in the `gfxstream` mode the whole VM.
+Now that command buffer's work is lost, and the device stays.
+
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window
