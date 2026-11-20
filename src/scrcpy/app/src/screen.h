@@ -15,6 +15,7 @@
 #include "disconnect.h"
 #include "fps_counter.h"
 #include "ika/latency.h"
+#include "ika/touch_editor.h"
 #include "frame_buffer.h"
 #include "ika/flex.h"
 #include "ika/window.h"
@@ -96,6 +97,12 @@ struct sc_screen {
     bool tex_stale;
     struct sc_input_manager im;
     struct sc_mouse_capture mc; // only used in mouse relative mode
+
+    // Ika: the touch keys' editor (MOD+t), with --touchkb
+    struct sc_touch_editor touch_editor;
+    bool has_touch_editor;
+    // Open it once the first frame shows (--touchkb-edit)
+    bool touch_editor_at_start;
     struct sc_fps_counter fps_counter;
     // Frame latency statistics (IKA_LATENCY=1)
     struct sc_latency latency;
@@ -177,6 +184,10 @@ struct sc_screen_params {
     struct sc_mouse_processor *mp;
     struct sc_gamepad_processor *gp;
     struct sc_keyboard_gamepad *kg;
+    struct sc_keyboard_touch *kt;
+    // Ika: the touch keys' file, and whether to edit them at start
+    const char *touch_file;
+    bool touch_edit;
     struct sc_gamepad_focus *gf;
 
     struct sc_mouse_bindings mouse_bindings;
@@ -254,6 +265,14 @@ sc_screen_set_orientation(struct sc_screen *screen,
 // set the display pause state
 void
 sc_screen_set_paused(struct sc_screen *screen, bool paused);
+
+// Ika: opens or closes the touch keys' editor (MOD+t), with --touchkb
+void
+sc_screen_toggle_touch_editor(struct sc_screen *screen);
+
+// Ika: shows or hides the touch keys' hints over the game (MOD+Shift+t)
+void
+sc_screen_toggle_touch_hints(struct sc_screen *screen);
 
 // react to SDL events
 void

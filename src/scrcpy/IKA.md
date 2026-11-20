@@ -16,6 +16,8 @@ options are described here, not in `scrcpy.1` or the shell completion.
 | `--dpi=N` | Flex display in pixels: the device display follows the window's size at density N |
 | `--window-state-file=PATH` | Save the windowed size and the fullscreen state on exit |
 | `--gamekb[=SPEC]` | The keyboard and the mouse as a gamepad of the device; needs `--gamepad=uhid` |
+| `--touchkb=FILE` | Keys that touch the display, as FILE says; MOD+t edits them over the game, MOD+Shift+t shows them |
+| `--touchkb-edit` | Opens the touch keys' editor as the window opens |
 | `--start-app=[+]info:PACKAGE` | Open PACKAGE's App info page instead of the app |
 
 | Variable | Meaning |
@@ -244,6 +246,78 @@ and map the mouse's buttons to the triggers and a stick click and its wheel to
 the shoulders, with `mouse_stick=off`: those mouse keys work only once a game's
 mapping sets a stick for the mouse.
 
+### Touch keys
+
+`--touchkb=FILE` makes keys touch the display, for games with on-screen
+controls only (`app/src/ika/keyboard_touch.c`); other keys still type. It
+cannot be used with `--gamekb`, whose timer it shares for the joystick's
+ramp.
+
+- **The file** (`touch.ini`, which need not exist yet) has a `[touch]`
+  section of `key key = X Y` lines: while one of the keys is held, a finger
+  touches the display at X Y, fractions of its width and height, 0 0 the top
+  left corner. Keys are named as in `--gamekb`'s spec, separated by blanks,
+  the wheel excepted. `key = X Y cast R` is a skill cast: the finger touches
+  X Y and slides toward the free mouse pointer, seen from `cast_center = X
+  Y` (the character, 0.5 0.5 by default), up to R (a fraction of the
+  display's height) once the pointer is half the display's height away, and
+  lifts when the key does. `joystick = X Y R` is an on-screen joystick of
+  radius R, whose `joystick_up`, `joystick_down`, `joystick_left` and
+  `joystick_right` keys (W, S, A, D by default) touch its center and slide R
+  away over `joystick_ramp_ms` (60; a quarter at once, then on the 8 ms
+  timer), as far on a diagonal as on an axis, the last pressed of two
+  opposite directions counting; its `joystick_walk` and `joystick_sprint`
+  keys make that `joystick_walk_percent` (50) and `joystick_sprint_percent`
+  (200) of R. `aim = X Y R` makes the captured mouse a finger dragged from X
+  Y (`aim_sensitivity = N`, 100: N/100 of a display pixel per mouse pixel).
+  `aspect = W/H` is the display's aspect ratio the points were placed at. Ika's
+  Startup Options window (`src/tools/ika-lib/window.sh`, `touch_load` and
+  `touch_dump`) reads and writes the same file, byte for byte as the client
+  writes it.
+- **Aspect ratio:** on a display of another aspect ratio (both landscape),
+  points move as a game scaling its interface with the display's height
+  moves its controls: the left third keeps its distance from the left edge,
+  the right third from the right edge, the middle from the center, in
+  display heights; portrait the same way vertically, in widths. The editor
+  rebases the points on the display it is shown on (and on each resize), and
+  saves that display's aspect ratio.
+- **The aim's edge:** when the motion would take the finger R from X Y, it
+  moves to the edge, the aim's other finger touches X Y, the first lifts,
+  and the second takes the rest of the motion, cut at each edge again for a
+  long flick (at most 64 times an event): there is always a finger on the
+  view, and no lift-and-touch the game could take for a tap.
+- **Fingers:** each point, the joystick and the aim's two is a finger of its
+  own, pointer ids from `SC_KEYBOARD_TOUCH_POINTER_ID`, apart from the
+  mouse's, so that they touch together and with the mouse. A point stays
+  down while any of its keys is held. No more than ten touch at once (what
+  Android and scrcpy's server take): an eleventh is dropped, with its
+  moves and release, and logged once.
+- **Keys:** any key but the shortcut modifiers (MOD) can touch; a key pressed
+  with MOD is a shortcut. A held key is released whatever modifier is down
+  by then, and every finger lifts when the window loses the focus.
+- **The mouse:** with `aim`, the window captures the pointer as for a
+  keyboard gamepad's `mouse_stick`, and while it is captured the mouse's
+  buttons are touch keys (unmapped ones and the wheel dropped). Free, or
+  without `aim`, the left button is a finger, as with `IKA_TOUCH=1`, and the
+  other buttons touch their points if they have one; the pointer's position
+  goes to the skill casts.
+
+The editor (`app/src/ika/touch_editor.c`) opens with MOD+t, or at start with
+`--touchkb-edit`, and draws the controls over the game in the window's
+renderer, with SDL's debug font; the direct Wayland present is off meanwhile.
+The game gets no input while it is open; keys with MOD still reach the
+shortcuts, so MOD+t closes it. A click on the display adds a point and the
+next key is its key; a click selects a control and a drag moves it, or
+resizes the joystick's, the aim's or a skill cast's ring from its edge; a
+key, or a right, middle or side click, adds or takes off a key of the
+selected point; with the joystick selected, keys go to its directions, then
+to walk and sprint, in turn; the wheel sets the aim's sensitivity. The
+toolbar's buttons add the joystick and the aim, make a point a skill cast,
+give the left button, delete, and close (Done); with a skill cast, a
+character marker sets `cast_center`. Closing drops the points without a key
+and saves the file. MOD+Shift+t shows the keys faintly over the game while
+it is played (hints), the direct present off as well.
+
 ## Server
 
 - `com.genymobile.scrcpy.IkaAppIcons` renders the icons of the launchable apps
@@ -265,5 +339,6 @@ mapping sets a stick for the mouse.
   by whole notches.
 - No VA-API: Ika's windows show raw frames, so scrcpy never decodes video with
   the GPU; `--hwdec` keeps only the Windows and macOS decoders.
-- `app/tests/test_keyboard_gamepad.c` tests the keyboard gamepad, in a debug
+- `app/tests/test_keyboard_gamepad.c` tests the keyboard gamepad, and
+  `app/tests/test_keyboard_touch.c` the touch keys and their file, in a debug
   build (`meson test`).

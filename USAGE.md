@@ -269,6 +269,7 @@ start:
 | **Send the mouse straight to Android (Cmd or Left-Alt releases pointer)** | The mouse is a physical mouse of Android's, and the window captures the pointer: tap Cmd (Left Super, the Windows key on other keyboards) or Left Alt to release it, click in the window to capture it again |
 | **Use gamepads, including ones plugged in later** | The host's gamepads, and ones plugged in later, reach Android |
 | **Keyboard as a gamepad (keys on the Gamepad Emulation tab)** | The keyboard and mouse drive a gamepad (see [Keyboard as a gamepad](#keyboard-as-a-gamepad)) |
+| **Keys touch the screen (keys on the Touch Controls tab)** | Keys tap the game's on-screen controls (see [Touch controls per game](#touch-controls-per-game)); the keyboard gamepad is off while it is ticked |
 | **Mouse as touch: clicks tap, drags swipe** | See [Touch input](#touch-input) |
 
 **Apply settings** saves the density and the ticked options, **Apply and
@@ -396,6 +397,94 @@ saved mapping holds every key and setting, so later changes to
 per-pad `socd_dpad`, `socd_left_stick` and `socd_right_stick` settings are not
 in the window; write them in the file by hand.
 
+### Touch controls per game
+
+Games with on-screen controls only, and no gamepad support, can be played
+with the keyboard and mouse by giving keys to their controls. With **Keys
+touch the screen** ticked in a game's start options, a key held down holds a
+finger on the screen where its control is, so several keys touch at once, as
+fingers do.
+
+The **Touch Controls** tab of the game's **Startup options** window
+(`ika app --touch-controls NAME` opens the window on it) lists them:
+
+- **Keys**, **Across** and **Down**: each row's keys touch the point Across,
+  Down, fractions of the screen's width and height from 0 to 1, 0 0 being
+  the top left corner. Keys are SDL's names separated by spaces, as on the
+  Gamepad Emulation tab (`Space`, `Left_Shift`, `Left_Ctrl`, `E`), or the
+  mouse's `Mouse_Left`, `Mouse_Right`, `Mouse_Middle`, `Mouse_X1` and
+  `Mouse_X2`. **Add** and **Remove** add and remove rows; a key given twice
+  is named in red beside them, as only its first control would get it.
+- **Skill cast** and **Reach**: for MOBAs and other games whose skills are
+  aimed by dragging from their button. While the key is held, the finger
+  touches the button and slides toward the mouse pointer, as seen from where
+  the character is (**Skill casts aim from**, the middle of the screen
+  unless you move it), up to its reach (a fraction of the screen's height)
+  once the pointer is half the screen's height away; releasing the key casts.
+- **On-screen joystick**: its center (Across, Down) and its size (the radius,
+  a fraction of the screen's height). While its **Up**, **Down**, **Left** or
+  **Right** key is held, W, S, A and D unless you give others, a finger
+  touches its center and slides out that way as a thumb does, over **Thumb,
+  ms** (60); on a diagonal as far as on an axis, and of two opposite
+  directions the last pressed counts. With its **Walk** key held, it goes
+  **Walk, %** of the way (50); with its **Sprint** key, **Sprint, %** (200),
+  past the ring, which most games take as running.
+- **Mouse looks around**: the mouse turns the game's view, as a finger dragged
+  from its center (Across, Down). Before the finger goes the size away, a
+  second finger touches the center and carries on, and only then does the
+  first lift, so the view turns without a jump, a stop or a stray tap.
+  **Sensitivity, %** sets how far it moves for the mouse's motion. The window
+  captures the pointer; tap Cmd or Left Alt to release it and take it back.
+  While captured, the mouse's buttons touch the points they are given,
+  `Mouse_Left` to fire for example.
+
+Without **Mouse looks around**, or while the pointer is free, a left click
+touches where it is, as with **Mouse as touch**, and the other buttons touch
+their points if they have one.
+
+The controls follow the window's shape. Ika saves the screen's aspect ratio
+with them, and on a wider or narrower window they move as games move their
+own controls: those in the left third of the screen keep their distance from
+the left edge, those in the right third from the right edge, and those in
+the middle from the center, while their height on the screen scales with
+it (from the top, middle or bottom, for a portrait game).
+
+Android takes ten fingers at once: a key that would be the eleventh touches
+nothing, and the window's log says so once.
+
+**Place in the game…** saves the settings and starts the game with its
+controls drawn over it, to place them with the mouse; Left-Alt+T or Cmd+T in
+the game's window does the same while playing, and Left-Alt+Shift+T or
+Cmd+Shift+T shows or hides the keys faintly over the game as you play. The
+game keeps running in the editor, but gets no input until you close it:
+
+- Click where a control is on the screen, then press its key: the point is
+  added with that key. Clicking a point selects it; dragging moves it.
+- With a point selected, a key, or a click of the right, middle or side mouse
+  buttons, adds that key to it, or takes it off if the point has it already;
+  a key another control had moves here. **Left click** on the editor's
+  toolbar gives the point the left button.
+- **Joystick** and **Mouse aim** on the toolbar add or select those; drag the
+  middle to move them and the ring to resize them. With the joystick
+  selected, keys go to its directions in turn, up, down, left and right, then
+  to walk and sprint; with the aim selected, the wheel sets its sensitivity.
+- **Skill cast** makes the selected point a skill cast, or a tap again: drag
+  its ring to set its reach, and the **character** marker onto the
+  character, where casts aim from.
+- **Delete** (the toolbar's, or the key) removes what is selected, and Escape
+  selects nothing.
+- **Done**, Left-Alt+T or Cmd+T saves them and gives the game its input back.
+
+The controls are saved in `~/ika/apps/PACKAGE/touch.ini`, which the tab and
+the editor both write and which can be edited by hand. Edited controls tick
+**Keys touch the screen**, unless you unticked it in the window. **Reset to
+default** deletes them.
+
+Keys touch only while the game has the focus; leaving the window lifts every
+finger. Left Alt and Left Super (Cmd) stay Ika's shortcut keys and touch
+nothing, so Left-Alt+F still leaves fullscreen. Every other key can touch,
+Ctrl and Shift included.
+
 ### Console arguments and logs
 
 The console and app windows are scrcpy windows. `scrcpy_args` in `[console]`
@@ -403,8 +492,8 @@ of `ika.ini`, or `--ika_scrcpy=`, gives them extra scrcpy options; a
 `--gamepad=` or `--gamekb` option there wins over the start options.
 
 The console's input setup is logged in `~/ika/ikastart.log`. An app window's
-log is `~/ika/apps/PACKAGE/window.log`, where the keyboard gamepad reports
-keys it does not know.
+log is `~/ika/apps/PACKAGE/window.log`, where the keyboard gamepad and the
+touch controls report keys they do not know.
 
 ## TV mode
 

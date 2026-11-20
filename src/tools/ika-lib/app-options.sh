@@ -15,8 +15,9 @@
 
 # The start options an app can save, in the order the window lists them and
 # they are saved in: a fullscreen window, the HID devices passed through to
-# Android (see app_input_enabled), and touch input.
-APP_START_OPTIONS=(fullscreen keyboard mouse gamepad gamekb touch)
+# Android and the keys that touch the screen (see app_input_enabled), and
+# touch input.
+APP_START_OPTIONS=(fullscreen keyboard mouse gamepad gamekb touchkb touch)
 
 # Prints the value of KEY in PACKAGE's section, or nothing.
 saved_app_setting() {
@@ -110,7 +111,7 @@ save_app_options_with_dpi() {
 # "Startup options" on an app's launcher in the desktop's app menu sets
 # them ('ika app --options NAME' from a terminal), and they apply whenever the
 # app starts, from the menu or 'ika app': fullscreen, keyboard, mouse, gamepad,
-# gamekb and touch, separated by spaces. A game added to the menu starts with
+# gamekb, touchkb and touch, separated by spaces. A game added to the menu starts with
 # fullscreen and keyboard. dpi, 96 to 999, gives the app's window a display
 # density of its own; without it, the window has the console's.
 EOF
@@ -144,7 +145,7 @@ apply_saved_app_options() {
       touch)
         export IKA_TOUCH=1
         ;;
-      keyboard|mouse|gamepad|gamekb)
+      keyboard|mouse|gamepad|gamekb|touchkb)
         inputs+=("${option}")
         ;;
       *)
@@ -173,6 +174,9 @@ app_start_option_text() {
       ;;
     gamekb)
       echo "Keyboard as a gamepad (keys on the Gamepad Emulation tab)"
+      ;;
+    touchkb)
+      echo "Keys touch the screen (keys on the Touch Controls tab)"
       ;;
     touch)
       echo "Mouse as touch: clicks tap, drags swipe"
@@ -417,12 +421,13 @@ default_app_options() {
 }
 
 # "Reset to default" once confirmed: PACKAGE's start options go back to its
-# default ones, at the console's density, and its controller mapping is
-# deleted, so that it uses ika.ini's [keyboard_gamepad] again.
+# default ones, at the console's density, and its controller mapping and touch
+# controls are deleted, so that it uses ika.ini's [keyboard_gamepad] again.
 reset_app_to_default() {
   local package="$1"
 
-  rm -f "$(app_controller_mapping_file "${package}")"
+  rm -f "$(app_controller_mapping_file "${package}")" \
+    "$(app_touch_controls_file "${package}")"
   # shellcheck disable=SC2046 # one word per option
   save_app_options_with_dpi "${package}" "" $(default_app_options "${package}")
 }
@@ -452,6 +457,43 @@ controller_mapping_form_text() {
   printf "%s\n%s\n<span font_size='4pt'> </span>" \
     "One or more keys per control, separated by spaces: Space, Return, Left_Shift," \
     "Keypad_Enter, Mouse_Left, Mouse_Right, Mouse_Middle, Wheel_Up, Wheel_Down"
+}
+
+# The Touch Controls tab's text, above its list.
+touch_controls_form_text() {
+  printf '%s' "Keys that touch the screen, for games with on-screen controls only, \
+when \"Keys touch the screen\" is ticked on the Startup Options tab. While a \
+row's key is held, a finger touches the screen there: Across and Down go from \
+0 to 1, 0 0 being the top left corner. Keys are SDL's names, separated by \
+spaces: Space, Left_Shift, Left_Ctrl, Mouse_Right... \
+<b>Place in the game…</b> shows the controls over the game to move them with \
+the mouse, as Left-Alt+T or Cmd+T does in its window."
+}
+
+# Prints the touch file's text as the Touch Controls tab writes it unedited,
+# for the file at PATH (which may not exist), with the window's environment
+# in the array named ENV_VAR.
+touch_controls_text() {
+  local -n touch_text_env_ref="$1"
+  local path="$2"
+  local output
+
+  output="$(mktemp "${CVD_TMP_DIR}/touch-text.XXXXXX")"
+  ika_window_py | env "${touch_text_env_ref[@]}" python3 -I - \
+    --tab=Touch --output="${output}" --touch="${path}" --print-defaults \
+    > /dev/null 2>&1 || true
+  cat "${output}"
+  rm -f "${output}"
+}
+
+# Whether the touch file at PATH has any control: a line under [touch]
+touch_controls_has_any() {
+  awk '
+    { sub(/[[:space:]]+$/, "") }
+    /^[[:space:]]*[#;]/ || /^[[:space:]]*$/ { next }
+    /^\[/ { in_section = (tolower($0) == "[touch]"); next }
+    in_section && /=/ { found = 1 }
+    END { exit !found }' "$1" 2>/dev/null
 }
 
 # The settings the controller mapping form shows, besides the controls' keys.

@@ -418,6 +418,13 @@ keyboard_gamepad_setting_values() {
   esac
 }
 
+# A game's touch controls: ~/ika/apps/PACKAGE/touch.ini, the keys that touch
+# the screen and where, for scrcpy's --touchkb, which the Touch Controls tab
+# of its Startup Options and the editor in its window (MOD+t) write.
+app_touch_controls_file() {
+  printf '%s/%s/touch.ini\n' "${IKA_APPS_DIR}" "$1"
+}
+
 # A game's controller mapping: ~/ika/apps/PACKAGE/controller.ini, the keys
 # and settings of [keyboard_gamepad] for that game, over ika.ini's.
 app_controller_mapping_file() {
@@ -520,7 +527,8 @@ keyboard_gamepad_spec() {
 }
 
 # Whether the app's start options pass INPUT through to Android as a HID
-# device: keyboard, mouse, gamepad, or gamekb (the keyboard as a gamepad).
+# device: keyboard, mouse, gamepad, or gamekb (the keyboard as a gamepad), or
+# make keys touch the screen (touchkb).
 # apply_saved_app_options exports them in IKA_APP_INPUT, separated by spaces,
 # for the app window it opens.
 app_input_enabled() {
@@ -545,8 +553,11 @@ tv_keyboard_gamepad_enabled() {
 # keyboard, the mouse, gamepads, and the keyboard as a gamepad (scrcpy's
 # --gamekb, with the [keyboard_gamepad] keys: those keys no longer type, other
 # keys still do). Extra args that set --gamepad or --gamekb themselves win.
-# Touch input needs the SDK mouse, so it wins over the mouse; a finger does
-# not hover.
+# With touchkb, keys touch the screen instead, as the game's touch.ini says
+# (scrcpy's --touchkb; --touchkb-edit as well with IKA_TOUCH_EDIT=1, to edit
+# them as the window opens), the keyboard gamepad left off, and the mouse is a
+# finger too. Touch input needs the SDK mouse, so it wins over the mouse; a
+# finger does not hover.
 append_scrcpy_input_args() {
   local -n input_args_ref="$1"
   local mode="$2"
@@ -562,7 +573,17 @@ append_scrcpy_input_args() {
     gamepad_args=(--gamepad=uhid)
   elif [[ "${mode}" == "app" ]]; then
     log "${label} HID devices: ${IKA_APP_INPUT:-none}"
-    if app_input_enabled gamekb; then
+    if app_input_enabled touchkb; then
+      input_args_ref+=("--touchkb=$(app_touch_controls_file "${package}")")
+      [[ "${IKA_TOUCH_EDIT:-}" != 1 ]] || input_args_ref+=(--touchkb-edit)
+      log "${label} touch controls: $(app_touch_controls_file "${package}")"
+      if app_input_enabled gamekb; then
+        log "${label} keys touch the screen, so the keyboard gamepad is off"
+      fi
+      if app_input_enabled gamepad; then
+        gamepad_args=(--gamepad=uhid)
+      fi
+    elif app_input_enabled gamekb; then
       log "${label} keyboard gamepad: $(keyboard_gamepad_spec "${package}")"
       gamepad_args=(--gamepad=uhid "--gamekb=$(keyboard_gamepad_spec "${package}")")
     elif app_input_enabled gamepad; then
@@ -580,7 +601,9 @@ append_scrcpy_input_args() {
   else
     input_args_ref+=(--keyboard=sdk --prefer-text)
   fi
-  if [[ "${mode}" != "tv" ]] && touch_enabled; then
+  if [[ "${mode}" == "app" ]] && app_input_enabled touchkb; then
+    input_args_ref+=(--no-mouse-hover)
+  elif [[ "${mode}" != "tv" ]] && touch_enabled; then
     if [[ "${mode}" == "app" ]] && app_input_enabled mouse; then
       log "${label} touch input: the mouse is not a HID device"
     else

@@ -16,6 +16,39 @@
 #include "util/log.h"
 #include "util/sdl.h"
 
+// Ika: the touch keys' fingers
+static struct sc_size
+sc_input_manager_kt_get_size(void *userdata) {
+    struct sc_input_manager *im = userdata;
+    return sc_screen_get_device_size(im->screen);
+}
+
+static void
+sc_input_manager_kt_touch(void *userdata,
+                          enum android_motionevent_action action,
+                          uint64_t pointer_id, struct sc_point point) {
+    struct sc_input_manager *im = userdata;
+    if (!im->controller || im->disconnected) {
+        return;
+    }
+
+    struct sc_control_msg msg;
+    msg.type = SC_CONTROL_MSG_TYPE_INJECT_TOUCH_EVENT;
+    msg.inject_touch_event.action = action;
+    msg.inject_touch_event.position.screen_size =
+        sc_screen_get_device_size(im->screen);
+    msg.inject_touch_event.position.point = point;
+    msg.inject_touch_event.pointer_id = pointer_id;
+    msg.inject_touch_event.pressure =
+        action == AMOTION_EVENT_ACTION_UP ? 0.0f : 1.0f;
+    msg.inject_touch_event.action_button = 0;
+    msg.inject_touch_event.buttons = 0;
+
+    if (!sc_controller_push_msg(im->controller, &msg)) {
+        LOGW("Could not request 'inject touch key event'");
+    }
+}
+
 void
 sc_input_manager_init(struct sc_input_manager *im,
                       const struct sc_input_manager_params *params) {
@@ -31,6 +64,7 @@ sc_input_manager_init(struct sc_input_manager *im,
     im->mp = params->mp;
     im->gp = params->gp;
     im->kg = params->kg;
+    im->kt = params->kt;
     im->gf = params->gf;
     im->camera = params->camera;
 
@@ -42,6 +76,17 @@ sc_input_manager_init(struct sc_input_manager *im,
 
     const char *touch = getenv("IKA_TOUCH");
     im->touch_mode = touch && *touch && strcmp(touch, "0");
+    if (im->kt) {
+        im->kt_sink = (struct sc_keyboard_touch_sink) {
+            .get_size = sc_input_manager_kt_get_size,
+            .touch = sc_input_manager_kt_touch,
+            .userdata = im,
+        };
+        im->kt->sink = &im->kt_sink;
+        im->kt->shortcut_mods = im->sdl_shortcut_mods;
+        // The game is touch-only: the free mouse is a finger too
+        im->touch_mode = true;
+    }
 
     im->vfinger_down = false;
     im->vfinger_invert_x = false;
@@ -450,6 +495,9 @@ sc_input_manager_process_key(struct sc_input_manager *im,
     if (im->kg && !down && sc_keyboard_gamepad_handle_key(im->kg, event)) {
         return;
     }
+    if (im->kt && !down && sc_keyboard_touch_handle_key(im->kt, event)) {
+        return;
+    }
 
     // Shortcuts that do not involve the MOD key
     switch (sdl_keycode) {
@@ -495,6 +543,21 @@ sc_input_manager_process_key(struct sc_input_manager *im,
             case SDLK_Q:
                 sc_push_event(SDL_EVENT_QUIT);
                 return;
+            case SDLK_T:
+                // Ika: MOD+t opens and closes the touch keys' editor; with a
+                // camera, it is the torch's, below
+                if (!im->camera) {
+                    if (control && video && !repeat && down) {
+                        if (shift) {
+                            // MOD+Shift+t shows the keys over the game
+                            sc_screen_toggle_touch_hints(im->screen);
+                        } else {
+                            sc_screen_toggle_touch_editor(im->screen);
+                        }
+                    }
+                    return;
+                }
+                break;
         }
 
         if (disconnected) {
@@ -642,6 +705,13 @@ sc_input_manager_process_key(struct sc_input_manager *im,
         return;
     }
 
+    // Ika: a touch key touches the display instead of typing
+    if (im->kt && control && !paused && !disconnected
+            && sc_keyboard_touch_handle_key(im->kt, event)) {
+        im->kg_took_key = down;
+        return;
+    }
+
     if (!im->kp || paused) {
         return;
     }
@@ -705,6 +775,14 @@ sc_input_manager_gamepad_has_mouse(struct sc_input_manager *im) {
         && sc_mouse_capture_is_active(&im->screen->mc);
 }
 
+// Ika: whether the touch keys aim with the mouse right now: aim is set and
+// the window holds the pointer captured
+static bool
+sc_input_manager_touch_keys_have_mouse(struct sc_input_manager *im) {
+    return im->kt && sc_keyboard_touch_takes_mouse(im->kt)
+        && sc_mouse_capture_is_active(&im->screen->mc);
+}
+
 static struct sc_position
 sc_input_manager_get_position(struct sc_input_manager *im, int32_t x,
                                                            int32_t y) {
@@ -740,6 +818,21 @@ sc_input_manager_process_mouse_motion(struct sc_input_manager *im,
                                                 event->yrel,
                                                 event->timestamp / 1000000);
         return;
+    }
+
+    // Ika: captured, the mouse aims for the touch keys
+    if (sc_input_manager_touch_keys_have_mouse(im)) {
+        sc_keyboard_touch_handle_mouse_motion(im->kt, event->xrel,
+                                              event->yrel);
+        return;
+    }
+
+    // Ika: free, the pointer is where the touch keys' skill casts slide to
+    if (im->kt && !(im->mp && im->mp->relative_mode)) {
+        struct sc_point p =
+            sc_screen_convert_window_to_frame_coords(im->screen, event->x,
+                                                     event->y);
+        sc_keyboard_touch_set_cursor(im->kt, true, p.x, p.y);
     }
 
     if (!im->mp) {
@@ -857,6 +950,15 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
     if ((!paused || !down) && sc_input_manager_gamepad_has_mouse(im)
             && sc_keyboard_gamepad_handle_mouse_button(
                    im->kg, button, down, event->timestamp / 1000000)) {
+        return;
+    }
+    // Ika: the touch keys' mouse buttons: every one while the pointer is
+    // captured for the aim, else the ones with a point of their own but the
+    // left one, which stays the mouse's finger
+    if (im->kt && (!paused || !down)
+            && sc_keyboard_touch_handle_mouse_button(
+                   im->kt, button, down,
+                   sc_input_manager_touch_keys_have_mouse(im))) {
         return;
     }
 
@@ -1014,6 +1116,11 @@ static void
 sc_input_manager_process_mouse_wheel(struct sc_input_manager *im,
                                      const SDL_MouseWheelEvent *event) {
     if (im->camera || im->screen->paused || im->disconnected) {
+        return;
+    }
+
+    // Ika: captured, the mouse aims for the touch keys, which drop the wheel
+    if (sc_input_manager_touch_keys_have_mouse(im)) {
         return;
     }
 

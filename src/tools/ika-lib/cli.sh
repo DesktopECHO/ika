@@ -211,6 +211,7 @@ Usage:
   ${SCRIPT_NAME} app --info NAME|PACKAGE
   ${SCRIPT_NAME} app --options NAME|PACKAGE
   ${SCRIPT_NAME} app --controller NAME|PACKAGE
+  ${SCRIPT_NAME} app --touch-controls NAME|PACKAGE
   ${SCRIPT_NAME} app
   ${SCRIPT_NAME} app close NAME|PACKAGE|--all
   ${SCRIPT_NAME} app sync [--remove]
@@ -377,8 +378,8 @@ App windows:
   need this)", "Send the mouse straight to Android (Cmd or Left-Alt releases
   pointer)", "Use gamepads, including ones plugged in later", "Keyboard as a
   gamepad (keys on the Gamepad Emulation tab)" (its keys are in
-  [keyboard_gamepad] in ika.ini) and "Mouse as touch:
-  clicks tap, drags swipe". The keyboard and the mouse sent straight to
+  [keyboard_gamepad] in ika.ini), "Keys touch the screen (keys on the Touch
+  Controls tab)" and "Mouse as touch: clicks tap, drags swipe". The keyboard and the mouse sent straight to
   Android reach it as HID devices (uhid), as gamepads do; the window
   captures the pointer, and tapping Cmd (Left Super) or Left Alt releases
   it. "Apply settings" saves them, "Apply and start" saves them and starts
@@ -408,7 +409,23 @@ App windows:
   "Reset to default", once confirmed, resets the start options (a game's to
   "Fullscreen mode", at the console's density) and removes the game's
   mapping, so that it has ika.ini's. '${SCRIPT_NAME} app --controller NAME'
-  opens the window on that tab. The window is GTK 3's (python3 with its GTK
+  opens the window on that tab.
+
+  Its "Touch Controls" tab has the keys that touch a game's on-screen
+  controls, with "Keys touch the screen" ticked: a row per point, its keys
+  (SDL's names, separated by spaces, or Mouse_Left, Mouse_Right...) and
+  where it is, Across and Down from 0 to 1 (0 0 is the top left corner),
+  or a skill cast that slides toward the mouse pointer up to its reach; an
+  on-screen joystick with its four keys (W, S, A and D by default), walk and
+  sprint keys and how long a thumb takes; and the mouse turning the view
+  ("Mouse looks around", with its sensitivity). "Place in the game..."
+  starts the game with the controls drawn over it, to place them with the
+  mouse, as Left-Alt+T or Cmd+T does in the game's window; Left-Alt+Shift+T
+  or Cmd+Shift+T shows the keys over the game while playing. They are saved
+  in ~/ika/apps/PACKAGE/touch.ini, with the screen's aspect ratio, so that
+  they follow the window's shape as a game's own controls do; edited ones
+  tick "Keys touch the screen", and "Reset to default" deletes them.
+  '${SCRIPT_NAME} app --touch-controls NAME' opens the window on that tab. The window is GTK 3's (python3 with its GTK
   bindings), native on Wayland and X11 alike.
 
 Installing and removing apps:

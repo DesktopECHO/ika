@@ -117,6 +117,8 @@ enum {
     OPT_DPI,
     OPT_WINDOW_STATE_FILE,
     OPT_KEYBOARD_GAMEPAD,
+    OPT_KEYBOARD_TOUCH,
+    OPT_KEYBOARD_TOUCH_EDIT,
 };
 
 struct sc_option {
@@ -1162,6 +1164,51 @@ static const struct sc_option options[] = {
                 "while captured; without, the mouse is not the gamepad's.\n"
                 "Requires --gamepad=uhid.",
     },
+    {
+        .longopt_id = OPT_KEYBOARD_TOUCH,
+        .longopt = "touchkb",
+        .argdesc = "file",
+        .text = "Make keys touch the display, for games with on-screen "
+                "controls only, as the file says; other keys still type. "
+                "MOD+t opens the editor over the game, which saves them "
+                "there (the file need not exist yet).\n"
+                "The file's [touch] section has \"key key = X Y\" lines: "
+                "while one of the keys is held, a finger touches the "
+                "display at X Y, fractions of its width and height (0 0 is "
+                "the top left corner). Keys are given as for --gamekb: SDL "
+                "scancode names with \"_\" for a space, or Mouse_Left, "
+                "Mouse_Right, Mouse_Middle, Mouse_X1 and Mouse_X2. "
+                "\"key = X Y cast R\" is a skill cast: held, its finger "
+                "slides from X Y toward the mouse pointer, seen from "
+                "cast_center (the display's center by default), up to R, a "
+                "fraction of the display's height. \"aspect = W/H\" is the "
+                "aspect ratio the points were placed at: on another, they "
+                "keep their distance from the nearest edge, or the center, "
+                "as a game's controls do.\n"
+                "\"joystick = X Y R\" is an on-screen joystick centered at "
+                "X Y, R its radius as a fraction of the display's height: "
+                "the keys of joystick_up, joystick_down, joystick_left and "
+                "joystick_right (W, S, A and D by default) touch its center "
+                "and slide R away over joystick_ramp_ms (60); the keys of "
+                "joystick_walk and joystick_sprint make that "
+                "joystick_walk_percent (50) and joystick_sprint_percent (200) "
+                "of R.\n"
+                "\"aim = X Y R\" makes the mouse look around, as a finger "
+                "dragged from X Y, handed over to a second finger there "
+                "before it goes R away; "
+                "aim_sensitivity = N (100 by default) moves it N/100 pixels "
+                "per pixel of the mouse. With aim, the window captures the "
+                "pointer (the capture key releases it), and the mouse's "
+                "buttons are the keys of their points while captured.\n"
+                "Without aim, or while the pointer is free, a left click "
+                "touches where it is.",
+    },
+    {
+        .longopt_id = OPT_KEYBOARD_TOUCH_EDIT,
+        .longopt = "touchkb-edit",
+        .text = "Open the touch keys' editor (MOD+t) as the window opens. "
+                "Requires --touchkb.",
+    },
 };
 
 static const struct sc_shortcut shortcuts[] = {
@@ -1269,6 +1316,14 @@ static const struct sc_shortcut shortcuts[] = {
     {
         .shortcuts = { "MOD+i" },
         .text = "Enable/disable FPS counter (print frames/second in logs)",
+    },
+    {
+        .shortcuts = { "MOD+t" },
+        .text = "Open or close the touch keys' editor, with --touchkb",
+    },
+    {
+        .shortcuts = { "MOD+Shift+t" },
+        .text = "Show or hide the touch keys over the game, with --touchkb",
     },
     {
         .shortcuts = { "Ctrl+click-and-move" },
@@ -3084,6 +3139,12 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             case OPT_KEYBOARD_GAMEPAD:
                 opts->keyboard_gamepad = optarg ? optarg : "";
                 break;
+            case OPT_KEYBOARD_TOUCH:
+                opts->keyboard_touch = optarg;
+                break;
+            case OPT_KEYBOARD_TOUCH_EDIT:
+                opts->keyboard_touch_edit = true;
+                break;
             case OPT_IGNORE_VIDEO_ENCODER_CONSTRAINTS:
                 opts->ignore_video_encoder_constraints = true;
                 break;
@@ -3285,6 +3346,21 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
     if (opts->keyboard_gamepad
             && opts->gamepad_input_mode != SC_GAMEPAD_INPUT_MODE_UHID) {
         LOGE("--gamekb requires --gamepad=uhid");
+        return false;
+    }
+
+    if (opts->keyboard_touch && opts->keyboard_gamepad) {
+        LOGE("--touchkb and --gamekb cannot be used together");
+        return false;
+    }
+
+    if (opts->keyboard_touch && !opts->control) {
+        LOGE("--touchkb requires device control");
+        return false;
+    }
+
+    if (opts->keyboard_touch_edit && !opts->keyboard_touch) {
+        LOGE("--touchkb-edit requires --touchkb");
         return false;
     }
 

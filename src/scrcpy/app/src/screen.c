@@ -9,6 +9,7 @@
 #include "icon.h"
 #include "ika/keyboard_gamepad.h"
 #include "ika/keyboard_gamepad_timer.h"
+#include "ika/keyboard_touch.h"
 #include "options.h"
 #include "util/log.h"
 #include "util/sdl.h"
@@ -351,11 +352,13 @@ sc_screen_set_texture_from_surface(struct sc_screen *screen,
     return true;
 }
 
-// Ika: the keyboard gamepad takes the mouse, so the pointer is captured as
-// for a HID mouse; unlike one, the SDK mouse still works while it is not
+// Ika: the keyboard gamepad (mouse_stick) or the touch keys (aim) take the
+// mouse, so the pointer is captured as for a HID mouse; unlike one, the SDK
+// mouse still works while it is not
 static bool
 sc_screen_gamepad_takes_mouse(struct sc_screen *screen) {
-    return screen->im.kg && sc_keyboard_gamepad_takes_mouse(screen->im.kg);
+    return (screen->im.kg && sc_keyboard_gamepad_takes_mouse(screen->im.kg))
+        || (screen->im.kt && sc_keyboard_touch_takes_mouse(screen->im.kt));
 }
 
 static inline bool
@@ -375,8 +378,13 @@ sc_screen_handle_mouse_capture_event(struct sc_screen *screen,
                           && sc_mouse_capture_is_active(&screen->mc);
     bool consumed = sc_mouse_capture_handle_event(&screen->mc, event);
     if (gamepad_had_mouse && !sc_mouse_capture_is_active(&screen->mc)) {
-        sc_keyboard_gamepad_release_mouse(screen->im.kg,
-                                          event->common.timestamp / 1000000);
+        if (screen->im.kg) {
+            sc_keyboard_gamepad_release_mouse(
+                screen->im.kg, event->common.timestamp / 1000000);
+        }
+        if (screen->im.kt) {
+            sc_keyboard_touch_release_mouse(screen->im.kt);
+        }
     }
     return consumed;
 }
@@ -525,6 +533,8 @@ sc_screen_present_direct(struct sc_screen *screen) {
 
     AVFrame *frame = screen->frame;
     if (!frame->buf[0] || screen->is_icon_active
+            || (screen->has_touch_editor && (screen->touch_editor.active
+                                             || screen->touch_editor.hints))
             || !sc_screen_is_raw_flex(screen)
             || !sc_flex_shows_live_only(&screen->flex)
             || screen->orientation != SC_ORIENTATION_0
@@ -553,6 +563,20 @@ sc_screen_present_direct(struct sc_screen *screen) {
     }
 
     return sc_wl_direct_present(&screen->wl_direct, frame);
+}
+
+// Ika: where the device's display is in the window, in window points, for the
+// touch keys' editor: screen->rect inside the window's margin, as
+// sc_screen_convert_window_to_frame_coords() takes it
+static SDL_FRect
+sc_screen_touch_view(struct sc_screen *screen) {
+    float margin = sc_ika_window_get_margin(&screen->ika_window);
+    return (SDL_FRect) {
+        .x = margin + screen->rect.x,
+        .y = margin + screen->rect.y,
+        .w = screen->rect.w,
+        .h = screen->rect.h,
+    };
 }
 
 // render the texture to the renderer
@@ -684,6 +708,19 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
 
 end:
     SDL_SetRenderViewport(renderer, NULL);
+    if (screen->has_touch_editor && !screen->is_icon_active
+            && (screen->touch_editor.active || screen->touch_editor.hints)) {
+        // Ika: the touch keys' editor over the game, or their hints
+        sc_touch_editor_set_view(&screen->touch_editor,
+                                 sc_screen_touch_view(screen),
+                                 SDL_GetWindowPixelDensity(screen->window),
+                                 sc_screen_get_device_size(screen));
+        if (screen->touch_editor.active) {
+            sc_touch_editor_render(&screen->touch_editor, renderer);
+        } else {
+            sc_touch_editor_render_hints(&screen->touch_editor, renderer);
+        }
+    }
     sc_ika_window_render_border(&screen->ika_window, renderer);
     sc_sdl_render_present(renderer);
 }
@@ -1108,6 +1145,7 @@ sc_screen_init(struct sc_screen *screen,
         .mp = params->mp,
         .gp = params->gp,
         .kg = params->kg,
+        .kt = params->kt,
         .gf = params->gf,
         .camera = params->camera,
         .mouse_bindings = params->mouse_bindings,
@@ -1117,6 +1155,15 @@ sc_screen_init(struct sc_screen *screen,
     };
 
     sc_input_manager_init(&screen->im, &im_params);
+
+    screen->has_touch_editor = params->kt && params->touch_file;
+    screen->touch_editor_at_start = screen->has_touch_editor
+                                 && params->touch_edit;
+    if (screen->has_touch_editor) {
+        sc_touch_editor_init(&screen->touch_editor, params->kt,
+                             params->touch_file);
+        screen->touch_editor.shortcut_mods = screen->im.sdl_shortcut_mods;
+    }
 
     // Initialize even if not used for simplicity
     sc_mouse_capture_init(&screen->mc, screen->window, params->shortcut_mods);
@@ -1786,6 +1833,60 @@ sc_screen_set_theme_background(struct sc_screen *screen, uint32_t color) {
     }
 }
 
+// Ika: opens the touch keys' editor: the fingers lift and the window lets the
+// pointer go, so that the mouse places the controls
+static void
+sc_screen_open_touch_editor(struct sc_screen *screen) {
+    assert(screen->has_touch_editor);
+    if (screen->orientation != SC_ORIENTATION_0) {
+        LOGW("Touch controls: the editor needs the display unrotated");
+        return;
+    }
+    sc_keyboard_touch_release_all(screen->touch_editor.kt);
+    if (sc_mouse_capture_is_active(&screen->mc)) {
+        sc_mouse_capture_set_active(&screen->mc, false);
+    }
+    sc_touch_editor_open(&screen->touch_editor,
+                         sc_screen_get_device_size(screen));
+}
+
+void
+sc_screen_toggle_touch_hints(struct sc_screen *screen) {
+    if (!screen->has_touch_editor) {
+        return;
+    }
+    screen->touch_editor.hints = !screen->touch_editor.hints;
+    LOGI("Touch controls: hints %s (MOD+Shift+t)",
+         screen->touch_editor.hints ? "shown" : "hidden");
+    if (screen->window_shown) {
+        sc_screen_render(screen, false);
+    }
+}
+
+void
+sc_screen_toggle_touch_editor(struct sc_screen *screen) {
+    if (!screen->has_touch_editor) {
+        LOGI("Touch controls: this window has none to edit (tick \"Keys "
+             "touch the screen\" in the app's Startup Options)");
+        return;
+    }
+    struct sc_touch_editor *te = &screen->touch_editor;
+    if (te->active) {
+        sc_touch_editor_close(te);
+        if (sc_keyboard_touch_takes_mouse(te->kt)
+                && (SDL_GetWindowFlags(screen->window)
+                    & SDL_WINDOW_INPUT_FOCUS)) {
+            // The mouse aims again
+            sc_mouse_capture_set_active(&screen->mc, true);
+        }
+    } else {
+        sc_screen_open_touch_editor(screen);
+    }
+    if (screen->window_shown) {
+        sc_screen_render(screen, false);
+    }
+}
+
 void
 sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
     // The compositor's releases of the frames shown directly
@@ -1806,6 +1907,12 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
                     || sc_screen_gamepad_takes_mouse(screen)) {
                 // Capture mouse on start
                 sc_mouse_capture_set_active(&screen->mc, true);
+            }
+
+            if (screen->touch_editor_at_start) {
+                // Ika: --touchkb-edit
+                screen->touch_editor_at_start = false;
+                sc_screen_open_touch_editor(screen);
             }
 
             sc_screen_render(screen, false);
@@ -1851,6 +1958,12 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         case SC_EVENT_GAMEKB_TIMER:
             if (screen->im.kg) {
                 sc_keyboard_gamepad_timer_on_event(screen->im.kg);
+            } else if (screen->im.kt
+                    && !sc_keyboard_touch_tick(screen->im.kt,
+                                               SDL_GetTicks())) {
+                // Ika: the touch keys' joystick ramp share its timer (they
+                // and the keyboard gamepad go without each other)
+                sc_keyboard_gamepad_timer_destroy();
             }
             return;
         case SC_EVENT_FLEX_TIMER:
@@ -1973,6 +2086,43 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         // keyboard gamepad's keys ourselves, before the mouse capture handler
         // consumes the event in relative mode
         sc_keyboard_gamepad_release_all(screen->im.kg);
+    }
+    if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST && screen->im.kt) {
+        // Ika: and lift the touch keys' fingers
+        sc_keyboard_touch_release_all(screen->im.kt);
+    }
+
+    // Ika: while the touch keys' editor is open, the input is its own, but for
+    // the window's shortcuts (MOD+t closes it); the mouse stays free
+    if (screen->has_touch_editor && screen->touch_editor.active) {
+        switch (event->type) {
+            case SDL_EVENT_KEY_DOWN:
+            case SDL_EVENT_KEY_UP:
+            case SDL_EVENT_TEXT_INPUT:
+            case SDL_EVENT_MOUSE_MOTION:
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+            case SDL_EVENT_MOUSE_WHEEL:
+            case SDL_EVENT_FINGER_DOWN:
+            case SDL_EVENT_FINGER_UP:
+            case SDL_EVENT_FINGER_MOTION: {
+                struct sc_touch_editor *te = &screen->touch_editor;
+                sc_touch_editor_set_view(te, sc_screen_touch_view(screen),
+                                    SDL_GetWindowPixelDensity(screen->window),
+                                    sc_screen_get_device_size(screen));
+                if (!sc_touch_editor_handle_event(te, event)) {
+                    sc_input_manager_handle_event(&screen->im, event);
+                } else if (te->close_requested) {
+                    sc_screen_toggle_touch_editor(screen);
+                } else if (event->type != SDL_EVENT_MOUSE_MOTION
+                        || te->drag != SC_TOUCH_EDITOR_DRAG_NONE) {
+                    sc_screen_render(screen, false);
+                }
+                return;
+            }
+            default:
+                break;
+        }
     }
 
     // Ika: the device has the host's gamepads only while the window has the

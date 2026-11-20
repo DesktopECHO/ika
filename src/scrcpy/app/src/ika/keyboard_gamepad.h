@@ -152,6 +152,14 @@ struct sc_keyboard_gamepad {
     const struct sc_keyboard_gamepad_timer *timer;
 };
 
+// The input "name" (len bytes) stands for, as in a spec, with "_" for a
+// space: a mouse button or wheel direction (Mouse_Left, Wheel_Up...), else an
+// SDL key name. Returns false if it is none.
+bool
+sc_keyboard_gamepad_parse_input(const char *name, size_t len,
+                                enum sc_keyboard_gamepad_input *input,
+                                uint32_t *code);
+
 // spec: the keys of each control and the settings, or NULL or "" for the
 // defaults. Keys, controls and settings that are not understood are reported
 // and skipped, as is a key given to a second control. timer: see

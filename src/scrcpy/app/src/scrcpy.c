@@ -31,6 +31,7 @@
 #include "ika/gamepad_focus.h"
 #include "ika/keyboard_gamepad.h"
 #include "ika/keyboard_gamepad_timer.h"
+#include "ika/keyboard_touch.h"
 #include "uhid/keyboard_uhid.h"
 #include "uhid/mouse_uhid.h"
 #ifdef HAVE_USB
@@ -61,6 +62,7 @@ struct scrcpy {
     struct sc_server server;
     struct sc_screen screen;
     struct sc_keyboard_gamepad keyboard_gamepad;
+    struct sc_keyboard_touch keyboard_touch;
     struct sc_audio_player audio_player;
     struct sc_demuxer video_demuxer;
     struct sc_demuxer audio_demuxer;
@@ -686,6 +688,7 @@ scrcpy(struct scrcpy_options *options) {
     struct sc_mouse_processor *mp = NULL;
     struct sc_gamepad_processor *gp = NULL;
     struct sc_keyboard_gamepad *kg = NULL;
+    struct sc_keyboard_touch *kt = NULL;
     struct sc_gamepad_focus *gf = NULL;
 
     if (options->control) {
@@ -842,6 +845,15 @@ aoa_complete:
             }
         }
 
+        if (options->keyboard_touch) {
+            sc_keyboard_touch_init_file(&s->keyboard_touch,
+                                        options->keyboard_touch);
+            // The joystick's ramp ticks on the keyboard gamepad's timer,
+            // which --gamekb does not use with --touchkb
+            s->keyboard_touch.timer = &SC_KEYBOARD_GAMEPAD_SDL_TIMER;
+            kt = &s->keyboard_touch;
+        }
+
         struct sc_uhid_devices *uhid_devices = NULL;
         if (uhid_keyboard) {
             sc_uhid_devices_init(&s->uhid_devices, uhid_keyboard);
@@ -876,6 +888,9 @@ aoa_complete:
             .mp = mp,
             .gp = gp,
             .kg = kg,
+            .kt = kt,
+            .touch_file = options->keyboard_touch,
+            .touch_edit = options->keyboard_touch_edit,
             .gf = gf,
             .mouse_bindings = options->mouse_bindings,
             .legacy_paste = options->legacy_paste,
@@ -1144,7 +1159,7 @@ end:
     if (timeout_started) {
         sc_timeout_stop(&s->timeout);
     }
-    if (kg) {
+    if (kg || kt) {
         sc_keyboard_gamepad_timer_destroy();
     }
 

@@ -379,6 +379,9 @@ struct scrcpy_options {
     const char *window_state_file;
     // Ika: NULL (no keyboard gamepad), "" (default keys) or a spec
     const char *keyboard_gamepad;
+    // Ika: --touchkb (the touch keys' file) and --touchkb-edit
+    const char *keyboard_touch;
+    bool keyboard_touch_edit;
 };
 
 extern const struct scrcpy_options scrcpy_options_default;

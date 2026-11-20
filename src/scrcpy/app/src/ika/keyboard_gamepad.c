@@ -164,6 +164,13 @@ kg_parse_input(const char *name, size_t len,
     return true;
 }
 
+bool
+sc_keyboard_gamepad_parse_input(const char *name, size_t len,
+                                enum sc_keyboard_gamepad_input *input,
+                                uint32_t *code) {
+    return kg_parse_input(name, len, input, code);
+}
+
 static void
 kg_add_key(struct sc_keyboard_gamepad *kg,
            const struct sc_keyboard_gamepad_control *control,

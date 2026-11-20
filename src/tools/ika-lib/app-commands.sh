@@ -302,6 +302,7 @@ run_app_command() {
   local info_mode="false"
   local options_mode="false"
   local controller_mode="false"
+  local touch_controls_mode="false"
   local fullscreen_mode="false"
   local title=""
   local window_size=""
@@ -375,6 +376,10 @@ run_app_command() {
         controller_mode="true"
         shift
         ;;
+      --touch-controls)
+        touch_controls_mode="true"
+        shift
+        ;;
       --title=*)
         title="${1#*=}"
         shift
@@ -442,6 +447,10 @@ run_app_command() {
   fi
   if [[ "${controller_mode}" == "true" ]]; then
     edit_app_settings "${name}" 2
+    return 0
+  fi
+  if [[ "${touch_controls_mode}" == "true" ]]; then
+    edit_app_settings "${name}" 3
     return 0
   fi
   # An app launched from a menu, a dock or a task bar with Shift held down

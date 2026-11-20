@@ -442,6 +442,78 @@ expect_equal "$(saved_app_options com.example.game)" "fullscreen touch" "Cancel,
 echo "ok: ika's program, applied untouched"
 
 
+# The Touch Controls tab, the third: it shows a copy of the game's touch.ini,
+# with the button that places them in the game. Untouched, nothing is saved;
+# edited, they are saved in touch.ini and tick the keys touching the screen.
+touch_file="$(app_touch_controls_file com.example.game)"
+touch_output() {
+  printf '# Touch controls\n\n[touch]\n'
+  printf '%s\n' "$@"
+}
+rm -f "${touch_file}"
+save_app_options com.example.game fullscreen
+reset_calls
+DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" \
+  edit_app_settings com.example.game 3
+expect_contains "$(<"${T}/window.args")" $'\n--active-tab=3\n' "on the third tab"
+tab3="$(<"${T}/window.tab3.args")"
+expect_contains "${tab3}" $'--tab=Touch Controls\n--output=' "the third tab"
+expect_contains "${tab3}" $'\n--touch=' "its touch controls"
+expect_contains "${tab3}" $'\n--touch-edit-code=5' "and the button that places them in the game"
+[[ ! -e "${touch_file}" ]] || fail "touch controls saved without an edit"
+expect_equal "$(saved_app_options com.example.game)" "fullscreen" "no touch keys ticked"
+echo "ok: the Touch Controls tab, untouched"
+
+reset_calls
+DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" \
+  DIALOG_TAB3="$(touch_output 'Space = 0.500 0.800' 'joystick = 0.150 0.700 0.120')" \
+  edit_app_settings com.example.game 3
+[[ -f "${touch_file}" ]] || fail "edited touch controls were not saved"
+expect_contains "$(<"${touch_file}")" $'\nSpace = 0.500 0.800\n' "the key's point"
+expect_equal "$(saved_app_options com.example.game)" "fullscreen touchkb" "edited, they tick the keys touching the screen"
+expect_contains "$(<"${T}/respond")" "Touch controls of Some Game saved" "and said so"
+# The next window shows them, and they stay as they are untouched
+reset_calls
+WINDOW_DEFAULTS=1 edit_app_settings com.example.game 3
+expect_contains "$(<"${touch_file}")" $'\njoystick = 0.150 0.700 0.120\n' "kept, through ika's program"
+[[ "$(<"${T}/respond")" != *"Touch controls"* ]] || fail "untouched controls saved again"
+echo "ok: edited touch controls are saved and tick the keys touching the screen"
+
+# The game's input: its touch.ini to the window, the keyboard gamepad off
+input_args=()
+IKA_APP_INPUT="keyboard gamekb touchkb" append_scrcpy_input_args input_args app "app window" com.example.game
+expect_contains " ${input_args[*]} " " --touchkb=${touch_file} " "the window gets the game's touch controls"
+[[ " ${input_args[*]} " != *" --gamekb"* ]] || fail "the keyboard gamepad with touch keys: ${input_args[*]}"
+expect_contains " ${input_args[*]} " " --no-mouse-hover " "the mouse is a finger"
+[[ " ${input_args[*]} " != *" --touchkb-edit "* ]] || fail "the editor opened unasked"
+
+# "Place in the game…" applies them and starts the game with the editor open
+reset_calls
+save_app_options com.example.game fullscreen
+open_app_window() { printf 'started %s edit=%s\n' "$1" "${IKA_TOUCH_EDIT:-}" >>"${T}/started"; }
+(DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" DIALOG_STATUS=5 \
+  edit_app_settings com.example.game 3)
+expect_equal "$(<"${T}/started")" "started com.example.game edit=1" "the game starts with the editor"
+expect_equal "$(saved_app_options com.example.game)" "fullscreen touchkb" "with the keys touching the screen"
+input_args=()
+IKA_TOUCH_EDIT=1 IKA_APP_INPUT="touchkb" append_scrcpy_input_args input_args app "app window" com.example.game
+expect_contains " ${input_args[*]} " " --touchkb-edit " "the window opens the editor"
+open_app_window() { printf 'started %s\n' "$1" >>"${T}/started"; }
+echo "ok: Place in the game"
+
+# Every control removed: the file goes; Reset to default removes it too
+reset_calls
+DIALOG_TAB1="$(options_output fullscreen touchkb)" DIALOG_TAB2="$(mapping_output)" \
+  DIALOG_TAB3="$(touch_output)" edit_app_settings com.example.game 3
+[[ ! -e "${touch_file}" ]] || fail "touch controls without a control kept"
+expect_contains "$(<"${T}/respond")" "Touch controls of Some Game removed" "and said so"
+touch_output 'F = 0.1 0.1' > "${touch_file}"
+reset_calls
+DIALOG_STATUS="4 0 2" DIALOG_TAB1="$(options_output fullscreen)" DIALOG_TAB2="$(mapping_output)" \
+  edit_app_settings com.example.game 1
+[[ ! -e "${touch_file}" ]] || fail "Reset to default kept the touch controls"
+echo "ok: touch controls removed"
+
 # Without python3's GTK bindings ika says what to install, and opens nothing
 reset_calls
 if (IKA_WINDOW_AVAILABLE=no

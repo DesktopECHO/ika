@@ -27,12 +27,13 @@ A setting is taken from the first of these that gives it:
 | `ika app NAME [OPTIONS]` | Opens an app in its own window. See [App windows](USAGE.md#app-windows). |
 | `ika app --options NAME` | Opens the app's start options window. |
 | `ika app --controller NAME` | Opens the start options window on its Gamepad Emulation tab. |
+| `ika app --touch-controls NAME` | Opens the start options window on its Touch Controls tab. |
 | `ika app NAME --dpi=N` | Opens an app window at a display density of 96 to 999 for this start (`auto`: the console's). |
 | `ika app --info NAME` | Opens Android's App info page for the app. |
 | `ika app close NAME` / `--all` | Closes an app window, or all of them, and ends games in the background. |
 | `ika app sync [--remove]` | Adds the Android apps to the desktop's app menu at once, or removes them and turns the automatic sync off. |
 | `ika install FILE.apk...` | Installs APK files, replacing an installed version of the same app and keeping its data. |
-| `ika remove NAME` | Uninstalls an app and deletes its data, its window state and its controller mapping. |
+| `ika remove NAME` | Uninstalls an app and deletes its data, its window state, its controller mapping and its touch controls. |
 | `ika root` | Roots Android with Magisk. See [Rooting with Magisk](USAGE.md#rooting-with-magisk). |
 | `ika gsf` | Prints and copies the Google Services Framework ID. See [Google sign-in](USAGE.md#google-sign-in-on-uncertified-devices). |
 | `ika backup [FILE]` / `ika restore [FILE]` | Backs up and restores your apps, files and choices. See [Backing up](USAGE.md#backing-up-apps-and-files). |
@@ -123,7 +124,7 @@ root. It removes the Android apps from the desktop's menu; the next
 `ika start` creates a new device and puts them back. It does not start
 Android.
 
-A reset keeps `ika.ini`, the apps' start options and controller mappings,
+A reset keeps `ika.ini`, the apps' start options, controller mappings and touch controls,
 your backups, the data partition size and the device's serial number.
 
 When the installed ROM's images are newer than Android's disk, after an
@@ -483,7 +484,7 @@ Ika keeps its files in `~/ika`:
 | --- | --- |
 | `ika.ini` | Settings |
 | `app-options.ini` | The apps' start options, a section per app: `options =` and the window's display density, `dpi =` (96 to 999; none for the console's) |
-| `apps/PACKAGE/` | An app window's size, title and log (`window.log`), and a game's `controller.ini` |
+| `apps/PACKAGE/` | An app window's size, title and log (`window.log`), and a game's `controller.ini` and `touch.ini` (its [touch controls](USAGE.md#touch-controls-per-game)) |
 | `apps/icons/` | The icons of the apps in the desktop's menu |
 | `apps/Chromium.apk`, `apps/Magisk-*.apk` | Downloads kept for new devices and for `ika root` |
 | `ika-backup-*.tgz` | Backups |

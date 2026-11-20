@@ -11,6 +11,7 @@
 #include "controller.h"
 #include "file_pusher.h"
 #include "ika/gamepad_focus.h"
+#include "ika/keyboard_touch.h"
 #include "options.h"
 #include "trait/gamepad_processor.h"
 #include "trait/key_processor.h"
@@ -26,6 +27,10 @@ struct sc_input_manager {
     struct sc_gamepad_processor *gp;
     // Ika: the keyboard as a gamepad (--gamekb), or NULL
     struct sc_keyboard_gamepad *kg;
+    // Ika: keys that touch the display (--touchkb), or NULL, and the sink
+    // its fingers go to
+    struct sc_keyboard_touch *kt;
+    struct sc_keyboard_touch_sink kt_sink;
     // Ika: passes the gamepads only while the window has the focus, or NULL
     struct sc_gamepad_focus *gf;
 
@@ -58,8 +63,8 @@ struct sc_input_manager {
 
     bool disconnected;
 
-    // Ika: the last key pressed drove the keyboard gamepad, so the text it
-    // produces is not typed
+    // Ika: the last key pressed drove the keyboard gamepad or a touch key,
+    // so the text it produces is not typed
     bool kg_took_key;
 };
 
@@ -71,6 +76,7 @@ struct sc_input_manager_params {
     struct sc_mouse_processor *mp;
     struct sc_gamepad_processor *gp;
     struct sc_keyboard_gamepad *kg;
+    struct sc_keyboard_touch *kt;
     struct sc_gamepad_focus *gf;
     bool camera;
 

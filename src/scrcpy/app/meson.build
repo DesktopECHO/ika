@@ -27,6 +27,8 @@ src = [
     'src/ika/gamepad_focus.c',
     'src/ika/keyboard_gamepad.c',
     'src/ika/keyboard_gamepad_timer.c',
+    'src/ika/keyboard_touch.c',
+    'src/ika/touch_editor.c',
     'src/keyboard_sdk.c',
     'src/mouse_capture.c',
     'src/mouse_sdk.c',
@@ -161,6 +163,12 @@ endif
 
 if usb_support
     dependencies += dependency('libusb-1.0', static: static)
+endif
+
+# Ika: the touch keys' editor draws circles (sqrtf, cosf, sinf)
+libm = cc.find_library('m', required: false)
+if libm.found()
+    dependencies += libm
 endif
 
 if host_machine.system() == 'windows'
@@ -303,6 +311,12 @@ if get_option('buildtype') == 'debug'
         ]],
         ['test_keyboard_gamepad', [
             'tests/test_keyboard_gamepad.c',
+            'src/ika/keyboard_gamepad.c',
+            'src/util/log.c',
+        ]],
+        ['test_keyboard_touch', [
+            'tests/test_keyboard_touch.c',
+            'src/ika/keyboard_touch.c',
             'src/ika/keyboard_gamepad.c',
             'src/util/log.c',
         ]],
