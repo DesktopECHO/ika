@@ -168,7 +168,7 @@ ika-base (261012-1) unstable; urgency=medium
     icon; the desktop entry is now ika.desktop.
   * Pass ~/.android/adbkey to user builds so ADB works with authentication.
   * Lengthen the boot timeout for older systems.
-  * Build against pinned static FFmpeg 9.0.2, SDL 3.4.18 and libusb.
+  * Build against pinned static FFmpeg 9.0.2, SDL 3.4.20 and libusb.
 
  -- DesktopECHO <build@desktopecho.com>  Mon, 12 Oct 2026 00:00:00 +0000
 

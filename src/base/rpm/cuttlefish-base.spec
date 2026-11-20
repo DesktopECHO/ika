@@ -810,7 +810,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
   icon; the desktop entry is now ika.desktop.
 - Pass ~/.android/adbkey to user builds so ADB works with authentication.
 - Lengthen the boot timeout for older systems.
-- Build against pinned static FFmpeg 9.0.2, SDL 3.4.18 and libusb.
+- Build against pinned static FFmpeg 9.0.2, SDL 3.4.20 and libusb.
 
 * Thu Sep 24 2026 DesktopECHO <build@desktopecho.com> - 260924-1
 - Update Ika host package metadata to 260924-1.
