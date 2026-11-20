@@ -21,7 +21,7 @@ The two gfxstream modes differ in where OpenGL ES is translated:
 | --- | --- | --- |
 | OpenGL ES in the guest | ANGLE | gfxstream's GLES encoder |
 | On the host | Vulkan only | OpenGL, and Vulkan when it is on |
-| OpenGL ES version | 3.2 | The highest the host's OpenGL ES offers |
+| OpenGL ES version | 3.2, or 3.1 where the host's Vulkan driver lacks tessellation shaders (Dozen, under WSL2) | The highest the host's OpenGL ES offers |
 | Vulkan in Android | Yes | Only with [Vulkan on](#vulkan-in-gfxstream-mode) |
 | Game compatibility | Better | Some games render incorrectly |
 | `--gfxstream_vulkan` | Ignored: Vulkan is required | Controls Vulkan |
@@ -630,6 +630,11 @@ an fd, so Venus runs differently from Linux:
   reads textures from the host's memory, RGBA8 cost Venus its lead over
   gfxstream. GPUs whose D3D12 driver lacks BC textures of any size keep
   RGBA8.
+- Apps get OpenGL ES 3.1, not 3.2: Dozen has no tessellation shaders, which
+  ANGLE needs for 3.2. Dozen also has no wide points (`largePoints`; a point
+  is one pixel whatever size a shader gives it), no custom border colors
+  (`GL_EXT_texture_border_clamp`) and no variable pointers, and Venus passes
+  on only what the host's driver has.
 - Ika's Dozen offers `VK_EXT_queue_family_foreign`, which Venus passes on to
   Android's apps
   ([dzn-queue-family-foreign.patch](src/tools/mesa/dzn-queue-family-foreign.patch)).
