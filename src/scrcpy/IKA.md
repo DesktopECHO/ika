@@ -258,7 +258,11 @@ mapping sets a stick for the mouse.
 - Log lines on stdout are flushed one by one, so that `~/ika/console.log` is
   up to date.
 - `app/deps` holds Ika's pinned static FFmpeg, SDL, libusb and dav1d builds,
-  shared with crosvm.
+  shared with crosvm. `app/deps/patches/sdl-wayland-fine-wheel.patch` makes
+  SDL take a Wayland scroll's precise value over its whole-notch count, which
+  compositors before `wl_seat` 8 send in every frame: under WSLg, touchpad
+  and wheel scrolling then moves the console by tenths of a notch, not only
+  by whole notches.
 - No VA-API: Ika's windows show raw frames, so scrcpy never decodes video with
   the GPU; `--hwdec` keeps only the Windows and macOS decoders.
 - `app/tests/test_keyboard_gamepad.c` tests the keyboard gamepad, in a debug

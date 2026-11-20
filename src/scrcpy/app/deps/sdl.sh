@@ -7,8 +7,15 @@ VERSION=3.4.20
 URL="https://github.com/libsdl-org/SDL/archive/refs/tags/release-$VERSION.tar.gz"
 SHA256SUM=5cb56d4223a41283f3c2baf6f1263fba171692409ae405a50417a7c8e7e28deb
 
-PROJECT_DIR="sdl-$VERSION"
-FILENAME="$PROJECT_DIR.tar.gz"
+# Ika's patches, applied in this order. The source and build folders are named
+# after the patches' checksum, so an unpacked tree without them is never used.
+PATCHES=(
+    sdl-wayland-fine-wheel.patch
+)
+PATCHES_SUM=$(cd "$PATCHES_DIR" && cat "${PATCHES[@]}" | sha256sum | cut -c1-12)
+
+FILENAME="sdl-$VERSION.tar.gz"
+PROJECT_DIR="sdl-$VERSION-ika-$PATCHES_SUM"
 
 cd "$SOURCES_DIR"
 
@@ -17,7 +24,12 @@ then
     echo "$PWD/$PROJECT_DIR" found
 else
     get_file "$URL" "$FILENAME" "$SHA256SUM"
+    rm -rf "SDL-release-$VERSION"
     tar xf "$FILENAME"  # First level directory is "SDL-release-$VERSION"
+    for p in "${PATCHES[@]}"
+    do
+        patch -d "SDL-release-$VERSION" -p1 --forward < "$PATCHES_DIR/$p"
+    done
     mv "SDL-release-$VERSION" "$PROJECT_DIR"
 fi
 

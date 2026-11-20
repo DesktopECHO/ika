@@ -1,0 +1,56 @@
+--- a/src/video/wayland/SDL_waylandevents.c
++++ b/src/video/wayland/SDL_waylandevents.c
+@@ -1101,17 +1101,21 @@
+                 break;
+             case SDL_WAYLAND_AXIS_EVENT_DISCRETE:
+                 /*
+-                 * This is a discrete axis event, so we process it and set the
+-                 * flag to ignore future continuous axis events in this frame.
++                 * A discrete step counts only in a frame without a continuous
++                 * value: compositors before wl_seat 8 (WSLg) send the precise
++                 * continuous value with a discrete count, mostly 0, in every
++                 * frame, and the count alone keeps only whole notches.
+                  */
+-                if (seat->pointer.pending_frame.axis.y_axis_type != SDL_WAYLAND_AXIS_EVENT_DISCRETE) {
++                if (seat->pointer.pending_frame.axis.y_axis_type == SDL_WAYLAND_AXIS_EVENT_CONTINUOUS &&
++                    seat->pointer.pending_frame.axis.y == 0.0f) {
+                     seat->pointer.pending_frame.axis.y_axis_type = SDL_WAYLAND_AXIS_EVENT_DISCRETE;
+                     seat->pointer.pending_frame.axis.y = 0 - (float)wl_fixed_to_double(value);
+                 }
+                 break;
+             case SDL_WAYLAND_AXIS_EVENT_CONTINUOUS:
+-                // Only process continuous events if no discrete events have been received.
+-                if (seat->pointer.pending_frame.axis.y_axis_type == SDL_WAYLAND_AXIS_EVENT_CONTINUOUS) {
++                // The continuous value is the precise one: it replaces a discrete count.
++                if (seat->pointer.pending_frame.axis.y_axis_type != SDL_WAYLAND_AXIS_EVENT_VALUE120) {
++                    seat->pointer.pending_frame.axis.y_axis_type = SDL_WAYLAND_AXIS_EVENT_CONTINUOUS;
+                     seat->pointer.pending_frame.axis.y = 0 - (float)wl_fixed_to_double(value);
+                 }
+                 break;
+@@ -1132,17 +1136,21 @@
+                 break;
+             case SDL_WAYLAND_AXIS_EVENT_DISCRETE:
+                 /*
+-                 * This is a discrete axis event, so we process it and set the
+-                 * flag to ignore future continuous axis events in this frame.
++                 * A discrete step counts only in a frame without a continuous
++                 * value: compositors before wl_seat 8 (WSLg) send the precise
++                 * continuous value with a discrete count, mostly 0, in every
++                 * frame, and the count alone keeps only whole notches.
+                  */
+-                if (seat->pointer.pending_frame.axis.x_axis_type != SDL_WAYLAND_AXIS_EVENT_DISCRETE) {
++                if (seat->pointer.pending_frame.axis.x_axis_type == SDL_WAYLAND_AXIS_EVENT_CONTINUOUS &&
++                    seat->pointer.pending_frame.axis.x == 0.0f) {
+                     seat->pointer.pending_frame.axis.x_axis_type = SDL_WAYLAND_AXIS_EVENT_DISCRETE;
+                     seat->pointer.pending_frame.axis.x = (float)wl_fixed_to_double(value);
+                 }
+                 break;
+             case SDL_WAYLAND_AXIS_EVENT_CONTINUOUS:
+-                // Only process continuous events if no discrete events have been received.
+-                if (seat->pointer.pending_frame.axis.x_axis_type == SDL_WAYLAND_AXIS_EVENT_CONTINUOUS) {
++                // The continuous value is the precise one: it replaces a discrete count.
++                if (seat->pointer.pending_frame.axis.x_axis_type != SDL_WAYLAND_AXIS_EVENT_VALUE120) {
++                    seat->pointer.pending_frame.axis.x_axis_type = SDL_WAYLAND_AXIS_EVENT_CONTINUOUS;
+                     seat->pointer.pending_frame.axis.x = (float)wl_fixed_to_double(value);
+                 }
+                 break;
