@@ -6,10 +6,10 @@ copy: each frame was copied once more on the virtio-gpu thread. A later
 partial write of the resource first refreshes the linear copy from the
 ColorBuffer, so it does not send stale pixels back.
 diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
-index e4011df..046e4d0 100644
+index 833ca45af..1da4420d6 100644
 --- a/host/virtio_gpu_resource.cpp
 +++ b/host/virtio_gpu_resource.cpp
-@@ -537,6 +537,27 @@ int VirtioGpuResource::TransferRead(uint64_t offset, stream_renderer_box* box,
+@@ -585,6 +585,27 @@ int VirtioGpuResource::TransferRead(uint64_t offset, stream_renderer_box* box,
          return -EINVAL;
      }
  
@@ -37,7 +37,7 @@ index e4011df..046e4d0 100644
      EnsureLinear();
  
      // First, copy from the underlying backend resource to this resource's linear buffer:
-@@ -581,6 +602,14 @@ int VirtioGpuResource::TransferWrite(uint64_t offset, stream_renderer_box* box,
+@@ -629,6 +650,14 @@ int VirtioGpuResource::TransferWrite(uint64_t offset, stream_renderer_box* box,
  
      EnsureLinear();
  
@@ -52,7 +52,7 @@ index e4011df..046e4d0 100644
      // First, copy from the desired iov to this resource's linear buffer:
      int ret = 0;
      if (iovs) {
-@@ -752,6 +781,7 @@ int VirtioGpuResource::ReadFromColorBufferToLinear(uint64_t offset, stream_rende
+@@ -800,6 +829,7 @@ int VirtioGpuResource::ReadFromColorBufferToLinear(uint64_t offset, stream_rende
                                                mLinear.size());
      }
  
@@ -61,10 +61,10 @@ index e4011df..046e4d0 100644
  }
  
 diff --git a/host/virtio_gpu_resource.h b/host/virtio_gpu_resource.h
-index 8f91eb0..a5235f0 100644
+index 2966cd856..13ef59451 100644
 --- a/host/virtio_gpu_resource.h
 +++ b/host/virtio_gpu_resource.h
-@@ -150,6 +150,9 @@ class VirtioGpuResource {
+@@ -154,6 +154,9 @@ class VirtioGpuResource {
      std::optional<struct stream_renderer_create_blob> mCreateBlobArgs;
      std::vector<struct iovec> mIovs;
      std::vector<char> mLinear;

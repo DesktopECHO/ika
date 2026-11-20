@@ -5,10 +5,10 @@ hostImageCopy feature itself now, but its format-feature allow-list still
 passes the bit, which no format may report while host image copy is hidden
 (ANGLE's texture uploads through host image copy came out empty).
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 6804234a8..3f802c109 100644
+index 657e7049c..d8cc65904 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -10996,8 +10996,11 @@ class VkDecoderGlobalState::Impl {
+@@ -12365,8 +12365,11 @@ class VkDecoderGlobalState::Impl {
          VK_FORMAT_FEATURE_2_FRAGMENT_DENSITY_MAP_BIT_EXT |
          VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
          VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT |

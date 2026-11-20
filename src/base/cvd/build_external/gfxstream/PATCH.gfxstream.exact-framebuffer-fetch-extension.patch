@@ -1,8 +1,8 @@
 diff --git a/host/gl/glestranslator/common/gles_context.cpp b/host/gl/glestranslator/common/gles_context.cpp
-index df539a4d5..c198a59c1 100644
+index aead59a01..c594a7be0 100644
 --- a/host/gl/glestranslator/common/gles_context.cpp
 +++ b/host/gl/glestranslator/common/gles_context.cpp
-@@ -1805,6 +1805,19 @@ void GLEScontext::releaseGlobalLock() {
+@@ -1843,6 +1843,19 @@ void GLEScontext::releaseGlobalLock() {
      s_lock.unlock();
  }
  
@@ -22,7 +22,7 @@ index df539a4d5..c198a59c1 100644
  void GLEScontext::initCapsLocked(const GLubyte * extensionString, bool nativeTextureDecompressionEnabled, GLSupport& glSupport)
  {
      const char* cstring = (const char*)extensionString;
-@@ -1973,7 +1986,9 @@ void GLEScontext::initCapsLocked(const GLubyte * extensionString, bool nativeTex
+@@ -2011,7 +2024,9 @@ void GLEScontext::initCapsLocked(const GLubyte * extensionString, bool nativeTex
  
      // b/203446380
      // Does not really work on hardware GPUs

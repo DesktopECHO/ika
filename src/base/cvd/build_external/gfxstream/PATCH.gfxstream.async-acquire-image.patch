@@ -7,9 +7,10 @@ submits to the device's queue, so it keeps its place among queue operations.
 that result under WSL2. Needs lineageos
 external-mesa3d-gfxstream-async-acquire-image.patch, which stops reading it.
 diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
+index d67d7b72d..24e4c1165 100644
 --- a/host/vulkan/vk_decoder.cpp
 +++ b/host/vulkan/vk_decoder.cpp
-@@ -284,6 +284,7 @@
+@@ -308,6 +308,7 @@ bool runsAlongsidePendingWork(uint32_t opcode) {
          case OP_vkQueueSubmitAsyncGOOGLE:
          case OP_vkQueueSubmitAsync2GOOGLE:
          case OP_vkQueueSignalReleaseImageANDROIDAsyncGOOGLE:
@@ -17,7 +18,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
          case OP_vkResetCommandPool:
          case OP_vkResetFences:
          case OP_vkGetFenceStatus:
-@@ -19673,8 +19674,22 @@
+@@ -19013,8 +19014,22 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                          (unsigned long long)nativeFenceFd, (unsigned long long)semaphore,
                          (unsigned long long)fence);
                  }
@@ -42,7 +43,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                      vkAcquireImageANDROID_VkResult_return =
                          m_state->on_vkAcquireImageANDROID(&m_pool, snapshotApiCallHandle, device,
                                                            image, nativeFenceFd, semaphore, fence);
-@@ -19682,8 +19697,8 @@
+@@ -19022,8 +19037,8 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  if ((vkAcquireImageANDROID_VkResult_return) == VK_ERROR_DEVICE_LOST)
                      m_state->on_DeviceLost();
                  vkStream->unsetHandleMapping();

@@ -2,7 +2,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 
 git_repository(
     name = "gfxstream",
-    commit = "94240f814c0097a63027ae680ea4bec7b0cb25f7",
+    commit = "5c921810f47e4075b282ec505a13ff29f1afedf1",
     remote = "https://github.com/google/gfxstream.git",
     patch_args = ["-p1"],
     patches = [
@@ -42,12 +42,6 @@ git_repository(
         # the guest's push constants afterwards so RADV does not run the next
         # draw with the decompression parameters (Asphalt 8 black 3D world).
         "@//build_external/gfxstream:PATCH.gfxstream.decompression-restore-push-constants.patch",
-        # Guests record image barriers with vkCmdPipelineBarrier2KHR; route it
-        # through the global state so emulated textures are decompressed too.
-        "@//build_external/gfxstream:PATCH.gfxstream.pipeline-barrier2khr-decompression.patch",
-        # Per-mip vkCmdCopyBufferToImage2 info for emulated compressed images
-        # was built from an uninitialized struct (srcBuffer, layout, sType).
-        "@//build_external/gfxstream:PATCH.gfxstream.copy-buffer-to-image2-init.patch",
         # Round texel row length/image height up to whole compressed blocks,
         # matching the rounded-up copy extent (e.g. 128-wide ASTC 6x6).
         "@//build_external/gfxstream:PATCH.gfxstream.compressed-row-length-round-up.patch",
@@ -76,10 +70,6 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.lazy-linear-transfer-buffer.patch",
         # Return the heap pages an exited guest app freed to the kernel.
         "@//build_external/gfxstream:PATCH.gfxstream.trim-heap-after-process-cleanup.patch",
-        # The process pipe hands virtio-gpu guests the invalid process id again,
-        # so a guest app's GL objects stay under its context id and are freed
-        # when it dies (each Chrome run left 60-200 MB behind on GL-only hosts).
-        "@//build_external/gfxstream:PATCH.gfxstream.virtio-gpu-invalid-process-id.patch",
         # Hosts with optimal-tiling-only ASTC (Honeykrisp) create optimal
         # ASTC images natively and emulate only linear-tiled ones, instead
         # of giving every ASTC texture a decompressed RGBA8 copy 4-16x its
@@ -136,8 +126,6 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.guest-image-format-list.patch",
         # Handle lookups take no mutex once more than 16000 handles are alive.
         "@//build_external/gfxstream:PATCH.gfxstream.boxed-handle-table.patch",
-        # Tearing down a device or instance removes its objects' handles too.
-        "@//build_external/gfxstream:PATCH.gfxstream.teardown-boxed-handles.patch",
         # A bind of descriptor sets records them only for who reads them.
         "@//build_external/gfxstream:PATCH.gfxstream.bind-descriptor-sets-record.patch",
     ],

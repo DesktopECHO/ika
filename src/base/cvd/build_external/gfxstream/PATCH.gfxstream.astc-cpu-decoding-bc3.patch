@@ -45,7 +45,7 @@ D3D12 device samples BC formats natively.
   and of the blocks decoding back to the texels, solid and from
   astc-encoder's checkerboard.
 diff --git a/host/vulkan/emulated_textures/BUILD.bazel b/host/vulkan/emulated_textures/BUILD.bazel
-index 2886c7717..8a88542ff 100644
+index 90ea31cde..357b973a6 100644
 --- a/host/vulkan/emulated_textures/BUILD.bazel
 +++ b/host/vulkan/emulated_textures/BUILD.bazel
 @@ -32,6 +32,7 @@ cc_library(
@@ -558,7 +558,7 @@ index daeeca63e..1b66ffcb3 100644
  }  // namespace vk
  }  // namespace host
 diff --git a/host/vulkan/emulated_textures/compressed_image_info.cpp b/host/vulkan/emulated_textures/compressed_image_info.cpp
-index 32289af1b..063b81f08 100644
+index 6b29cd8de..1ad227644 100644
 --- a/host/vulkan/emulated_textures/compressed_image_info.cpp
 +++ b/host/vulkan/emulated_textures/compressed_image_info.cpp
 @@ -370,6 +370,15 @@ VkImageCreateInfo CompressedImageInfo::getOutputCreateInfo(
@@ -631,7 +631,7 @@ index 32289af1b..063b81f08 100644
      GFXSTREAM_WARNING("ASTC image %p: %s; decoding it on the GPU instead of the CPU.",
                        mOutputImage, reason);
 diff --git a/host/vulkan/emulated_textures/compressed_image_info.h b/host/vulkan/emulated_textures/compressed_image_info.h
-index 18ab01b6c..9206ac7ce 100644
+index 3f272ba7e..b3d6a436a 100644
 --- a/host/vulkan/emulated_textures/compressed_image_info.h
 +++ b/host/vulkan/emulated_textures/compressed_image_info.h
 @@ -73,6 +73,12 @@ class CompressedImageInfo {
@@ -647,7 +647,7 @@ index 18ab01b6c..9206ac7ce 100644
      // Should be called when the guest calls vkCmdPipelineBarrier.
      // This function checks if the image barrier transitions the compressed image to a layout where
      // it will be read from, and if so, it decompresses the image.
-@@ -131,6 +137,13 @@ class CompressedImageInfo {
+@@ -136,6 +142,13 @@ class CompressedImageInfo {
      bool needsGpuAstcDecode() const { return mNeedsGpuAstcDecode; }
      void requireGpuAstcDecode(const char* reason);
  
@@ -661,7 +661,7 @@ index 18ab01b6c..9206ac7ce 100644
     private:
      // Returns a vector of image barriers for the compressed mipmap images and the decompressed
      // image.
-@@ -186,6 +199,7 @@ class CompressedImageInfo {
+@@ -191,6 +204,7 @@ class CompressedImageInfo {
      // Used to perform CPU decompression of ASTC textures. Null for non-ASTC images.
      std::unique_ptr<AstcTexture> mAstcTexture = nullptr;
      bool mNeedsGpuAstcDecode = false;
@@ -670,7 +670,7 @@ index 18ab01b6c..9206ac7ce 100644
      // Vulkan resources used by the decompression pipeline
      GpuDecompressionPipelineManager* mPipelineManager = nullptr;
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
-index c1c5f7691..8925f1cf8 100644
+index 5b39fd17f..4250d441d 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
 @@ -25,6 +25,8 @@
@@ -682,7 +682,7 @@ index c1c5f7691..8925f1cf8 100644
  #include "gfxstream/Macros.h"
  #include "gfxstream/Optional.h"
  #include "gfxstream/Tracing.h"
-@@ -750,6 +752,89 @@ int VkEmulation::getSelectedGpuIndex(
+@@ -751,6 +753,89 @@ int VkEmulation::getSelectedGpuIndex(
      return selectedGpuIndex;
  }
  
@@ -772,7 +772,7 @@ index c1c5f7691..8925f1cf8 100644
  std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
                                                   gfxstream::host::GlobalState* globalState,
                                                   const gfxstream::host::FeatureSet& features) {
-@@ -1318,18 +1403,19 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+@@ -1319,18 +1404,19 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
      // WSL2: Windows reset the GPU, D3D12 removed the device and gfxstream aborted
      // on VK_ERROR_DEVICE_LOST, ending the VM. On Dozen, ASTC textures are decoded
      // on the CPU when they are uploaded. IKA_ASTC_DECODE=gpu or cpu overrides the
@@ -795,7 +795,7 @@ index c1c5f7691..8925f1cf8 100644
                                astcDecodeChoice.c_str());
          }
          if (mode == AstcEmulationMode::Cpu && !AstcCpuDecompressor::get().available()) {
-@@ -1337,9 +1423,18 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+@@ -1338,9 +1424,18 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
              mode = AstcEmulationMode::Gpu;
          }
          emulation->mAstcLdrEmulationMode = mode;
@@ -816,7 +816,7 @@ index c1c5f7691..8925f1cf8 100644
      }
  
      // Collect image support info of the selected device
-@@ -1685,6 +1780,19 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+@@ -1686,6 +1781,19 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
  
      emulation->mTransferQueueCommandBufferPool.resize(0);
  
@@ -837,10 +837,10 @@ index c1c5f7691..8925f1cf8 100644
          if (!emulation->mYcbcrSamplerPool.init(ivk, dvk, emulation->mPhysicalDevice,
                                                 emulation->mDevice)) {
 diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
-index a65557e30..481fc32da 100644
+index d077503ba..40f13891b 100644
 --- a/host/vulkan/vk_common_operations.h
 +++ b/host/vulkan/vk_common_operations.h
-@@ -214,6 +214,10 @@ class VkEmulation {
+@@ -227,6 +227,10 @@ class VkEmulation {
      gfxstream::host::GlobalState* getGlobalState() const;
  
      AstcEmulationMode getAstcLdrEmulationMode() const;
@@ -851,7 +851,7 @@ index a65557e30..481fc32da 100644
  
      gfxstream::host::RenderDocWithMultipleVkInstances* getRenderDoc();
  
-@@ -672,6 +676,7 @@ class VkEmulation {
+@@ -694,6 +698,7 @@ class VkEmulation {
      // Whether to use ASTC emulation. Our current ASTC decoder implementation may lead to device
      // lost on certain device on Windows.
      AstcEmulationMode mAstcLdrEmulationMode = AstcEmulationMode::Disabled;
@@ -860,10 +860,10 @@ index a65557e30..481fc32da 100644
      // Whether to use ETC2 emulation.
      bool mEnableEtc2Emulation = false;
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 1dde4d13e..77dd140df 100644
+index cafa85cb0..f79a6c30a 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -230,6 +230,19 @@ static bool usesSparseImageBinding(VkImageCreateFlags flags) {
+@@ -234,6 +234,19 @@ static bool usesSparseImageBinding(VkImageCreateFlags flags) {
      return (flags & kSparseImageCreateFlags) != 0;
  }
  
@@ -883,7 +883,7 @@ index 1dde4d13e..77dd140df 100644
  static bool isDescriptorTypeImageInfo(VkDescriptorType descType) {
      return (descType == VK_DESCRIPTOR_TYPE_SAMPLER) ||
             (descType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) ||
-@@ -3665,6 +3678,10 @@ class VkDecoderGlobalState::Impl {
+@@ -3798,6 +3811,10 @@ class VkDecoderGlobalState::Impl {
          if (needDecompression) {
              cmpInfo = std::make_unique<CompressedImageInfo>(device, *pCreateInfo,
                                                              deviceInfo->decompPipelines.get());
@@ -894,7 +894,7 @@ index 1dde4d13e..77dd140df 100644
              decompInfo = cmpInfo->getOutputCreateInfo(*pCreateInfo);
              pCreateInfo = &decompInfo;
          }
-@@ -5930,6 +5947,30 @@ class VkDecoderGlobalState::Impl {
+@@ -6465,6 +6482,30 @@ class VkDecoderGlobalState::Impl {
          destroyPipelineLocked(device, deviceDispatch, pipeline);
      }
  
@@ -925,7 +925,7 @@ index 1dde4d13e..77dd140df 100644
      void on_vkCmdCopyImage(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
                             VkCommandBuffer boxed_commandBuffer, VkImage srcImage,
                             VkImageLayout srcImageLayout, VkImage dstImage,
-@@ -5954,7 +5995,8 @@ class VkDecoderGlobalState::Impl {
+@@ -6489,7 +6530,8 @@ class VkDecoderGlobalState::Impl {
          }
          if (dstImg->compressInfo && dstImg->compressInfo->isAstc() &&
              dstImg->compressInfo->canDecompressOnCpu()) {
@@ -935,7 +935,7 @@ index 1dde4d13e..77dd140df 100644
          }
          VkImage srcImageMip = srcImage;
          VkImage dstImageMip = dstImage;
-@@ -6021,7 +6063,10 @@ class VkDecoderGlobalState::Impl {
+@@ -6560,7 +6602,10 @@ class VkDecoderGlobalState::Impl {
          }
          if (dstImg->compressInfo && dstImg->compressInfo->isAstc() &&
              dstImg->compressInfo->canDecompressOnCpu()) {
@@ -947,7 +947,7 @@ index 1dde4d13e..77dd140df 100644
          }
          VkImage srcImageMip = pCopyImageInfo->srcImage;
          VkImage dstImageMip = pCopyImageInfo->dstImage;
-@@ -6097,7 +6142,10 @@ class VkDecoderGlobalState::Impl {
+@@ -6640,7 +6685,10 @@ class VkDecoderGlobalState::Impl {
          }
          if (dstImg->compressInfo && dstImg->compressInfo->isAstc() &&
              dstImg->compressInfo->canDecompressOnCpu()) {

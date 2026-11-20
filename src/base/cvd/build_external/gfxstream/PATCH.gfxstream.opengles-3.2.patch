@@ -227,7 +227,7 @@ index d0ec82525..2c4cf2a49 100644
      };
      struct TextureUnit {
 diff --git a/host/gl/gles_version_detector.cpp b/host/gl/gles_version_detector.cpp
-index 34415eb02..9305721d1 100644
+index be720938b..5bdf5dd5f 100644
 --- a/host/gl/gles_version_detector.cpp
 +++ b/host/gl/gles_version_detector.cpp
 @@ -41,6 +41,10 @@ static const EGLint gles3ConfigAttribs[] =
@@ -294,7 +294,7 @@ index 606b701e9..c97cdd964 100644
  } GLESVersion;
  
 diff --git a/host/gl/glestranslator/egl/egl_display.cpp b/host/gl/glestranslator/egl/egl_display.cpp
-index 7804a005a..e2b78ea22 100644
+index 315cb9b8a..402d99f78 100644
 --- a/host/gl/glestranslator/egl/egl_display.cpp
 +++ b/host/gl/glestranslator/egl/egl_display.cpp
 @@ -33,6 +33,7 @@ EglDisplay::EglDisplay(EGLNativeDisplayType dpy,
@@ -306,7 +306,7 @@ index 7804a005a..e2b78ea22 100644
  
  EglDisplay::~EglDisplay() {
 diff --git a/host/gl/glestranslator/egl/egl_imp.cpp b/host/gl/glestranslator/egl/egl_imp.cpp
-index 2f3969504..f4a0912c5 100644
+index c5cfe0c92..6ed126f8b 100644
 --- a/host/gl/glestranslator/egl/egl_imp.cpp
 +++ b/host/gl/glestranslator/egl/egl_imp.cpp
 @@ -388,6 +388,17 @@ EGLAPI EGLBoolean EGLAPIENTRY eglInitialize(EGLDisplay display, EGLint *major, E
@@ -327,7 +327,7 @@ index 2f3969504..f4a0912c5 100644
      dpy->initialize(renderableType);
      return EGL_TRUE;
  }
-@@ -985,6 +996,9 @@ static EGLContext eglCreateOrLoadContext(EGLDisplay display, EGLConfig config,
+@@ -989,6 +1000,9 @@ static EGLContext eglCreateOrLoadContext(EGLDisplay display, EGLConfig config,
           case 1:
               glesVersion = GLES_3_1;
               break;
@@ -337,7 +337,7 @@ index 2f3969504..f4a0912c5 100644
           default:
               RETURN_ERROR(EGL_NO_CONTEXT, EGL_BAD_ATTRIBUTE);
               break;
-@@ -1761,9 +1775,11 @@ EGLAPI void EGLAPIENTRY eglSetMaxGLESVersion(EGLint version) {
+@@ -1765,9 +1779,11 @@ EGLAPI void EGLAPIENTRY eglSetMaxGLESVersion(EGLint version) {
          glesVersion = GLES_3_0;
          break;
      case 2:
@@ -351,10 +351,10 @@ index 2f3969504..f4a0912c5 100644
  
      if (g_eglInfo->getIface(GLES_1_1)) {
 diff --git a/host/gl/glestranslator/egl/egl_os_api.h b/host/gl/glestranslator/egl/egl_os_api.h
-index 3c137a227..de60c1c23 100644
+index 4b6edc318..ec4079717 100644
 --- a/host/gl/glestranslator/egl/egl_os_api.h
 +++ b/host/gl/glestranslator/egl/egl_os_api.h
-@@ -151,6 +151,11 @@ inline GlesVersion calcMaxESVersionFromCoreVersion(int coreMajor, int coreMinor)
+@@ -154,6 +154,11 @@ inline GlesVersion calcMaxESVersionFromCoreVersion(int coreMajor, int coreMinor)
              // 4.3 core has all the entry points we need, but we want 4.5 core for
              // ARB_ES31_compatibility to avoid shader translation (for now. TODO:
              // translate ESSL 310 to 4.3 shaders)
@@ -367,10 +367,10 @@ index 3c137a227..de60c1c23 100644
          default:
              return EglOS::GlesVersion::ES2;
 diff --git a/host/gl/glestranslator/egl/egl_os_api_egl.cpp b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
-index 9a9038dae..f137fd1fb 100644
+index 19505b60e..59cdf2d04 100644
 --- a/host/gl/glestranslator/egl/egl_os_api_egl.cpp
 +++ b/host/gl/glestranslator/egl/egl_os_api_egl.cpp
-@@ -421,6 +421,10 @@ EglOsEglDisplay::EglOsEglDisplay(bool nullEgl) {
+@@ -537,6 +537,10 @@ EglOsEglDisplay::EglOsEglDisplay(bool nullEgl) {
      static const EGLint pbufAttribs[] =
          { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
  
@@ -381,7 +381,7 @@ index 9a9038dae..f137fd1fb 100644
      static const EGLint gles31Attribs[] =
         { EGL_CONTEXT_MAJOR_VERSION_KHR, 3,
           EGL_CONTEXT_MINOR_VERSION_KHR, 1, EGL_NONE };
-@@ -439,15 +443,21 @@ EglOsEglDisplay::EglOsEglDisplay(bool nullEgl) {
+@@ -555,15 +559,21 @@ EglOsEglDisplay::EglOsEglDisplay(bool nullEgl) {
                  config, pbufAttribs);
          if (surface != EGL_NO_SURFACE) {
              EGLContext ctx = mDispatcher.eglCreateContext(mDisplay,
@@ -407,7 +407,7 @@ index 9a9038dae..f137fd1fb 100644
                  }
              }
              mDispatcher.eglDestroySurface(mDisplay, surface);
-@@ -466,8 +476,6 @@ EglOsEglDisplay::~EglOsEglDisplay() {
+@@ -582,8 +592,6 @@ EglOsEglDisplay::~EglOsEglDisplay() {
  }
  
  EglOS::GlesVersion EglOsEglDisplay::getMaxGlesVersion() {
@@ -417,10 +417,10 @@ index 9a9038dae..f137fd1fb 100644
  }
  
 diff --git a/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp b/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp
-index b22bf1a98..c2e80bb1d 100644
+index 63efd846c..0bf7e2342 100644
 --- a/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp
 +++ b/host/gl/glestranslator/gles_v2/gles_v2_imp.cpp
-@@ -903,6 +903,9 @@ GL_APICALL void  GL_APIENTRY glCompileShader(GLuint shader){
+@@ -904,6 +904,9 @@ GL_APICALL void  GL_APIENTRY glCompileShader(GLuint shader){
  
              ctx->dispatcher().glGetShaderiv(globalShaderName,GL_COMPILE_STATUS,&compileStatus);
              sp->setCompileStatus(compileStatus == GL_FALSE ? false : true);
@@ -430,7 +430,7 @@ index b22bf1a98..c2e80bb1d 100644
          } else {
              ctx->dispatcher().glCompileShader(globalShaderName);
              sp->setCompileStatus(false);
-@@ -3261,6 +3264,10 @@ GL_APICALL void  GL_APIENTRY glLinkProgram(GLuint program){
+@@ -3404,6 +3407,10 @@ GL_APICALL void  GL_APIENTRY glLinkProgram(GLuint program){
          ctx->dispatcher().glGetProgramInfoLog(globalProgramName, infoLogLength,
                                                &cLog, log.get());
  
@@ -469,7 +469,7 @@ index bfcc66000..7a5d3e22b 100644
  }
 -
 diff --git a/host/render_control.cpp b/host/render_control.cpp
-index 9b9589260..50646e6ee 100644
+index aca4512bc..9143fb2e9 100644
 --- a/host/render_control.cpp
 +++ b/host/render_control.cpp
 @@ -57,6 +57,7 @@ using gl::EmulatedEglFenceSync;
@@ -493,7 +493,7 @@ index 9b9589260..50646e6ee 100644
  
  // HWComposer Host Composition
  static const char* kHostCompositionV1 = "ANDROID_EMU_host_composition_v1";
-@@ -370,6 +372,8 @@ const char* maxVersionToFeatureString(GLESDispatchMaxVersion version) {
+@@ -370,6 +372,8 @@ static const char* maxVersionToFeatureString(GLESDispatchMaxVersion version) {
              return kGLESDynamicVersion_3_0;
          case GLES_DISPATCH_MAX_VERSION_3_1:
              return kGLESDynamicVersion_3_1;

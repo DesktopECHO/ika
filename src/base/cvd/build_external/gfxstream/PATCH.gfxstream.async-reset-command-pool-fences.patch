@@ -5,9 +5,10 @@ external-mesa3d-gfxstream-async-resets.patch). Both can only fail for lack
 of memory, and 3DMark Wild Life Extreme resets about 40 pools and fences per
 frame, each a synchronous round trip through the guest's command ring.
 diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
+index 1a0cb44a5..e78c2f9f9 100644
 --- a/host/vulkan/vk_decoder.cpp
 +++ b/host/vulkan/vk_decoder.cpp
-@@ -2772,8 +2772,8 @@
+@@ -2542,8 +2542,8 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  if ((vkResetFences_VkResult_return) == VK_ERROR_DEVICE_LOST)
                      m_state->on_DeviceLost();
                  vkStream->unsetHandleMapping();
@@ -18,7 +19,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                  if (m_snapshotsEnabled) {
                      m_state->snapshot()->vkResetFences(&m_pool, snapshotApiCallHandle, packet,
                                                         packetLen, vkResetFences_VkResult_return,
-@@ -3853,8 +3853,8 @@
+@@ -3552,8 +3552,8 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  if ((vkResetCommandPool_VkResult_return) == VK_ERROR_DEVICE_LOST)
                      m_state->on_DeviceLost();
                  vkStream->unsetHandleMapping();

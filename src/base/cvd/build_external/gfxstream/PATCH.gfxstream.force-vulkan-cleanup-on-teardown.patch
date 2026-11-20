@@ -10,10 +10,10 @@ VkDecoderGlobalState already has the dependency-aware destruction path used by
 vkDestroyInstance. Run it for every still-tracked instance from Impl's
 destructor, while VkEmulation and its host Vulkan dispatch are still alive.
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 3f802c109..1c6512907 100644
+index d8cc65904..e5c33de40 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -331,7 +331,7 @@ class VkDecoderGlobalState::Impl {
+@@ -390,7 +390,7 @@ class VkDecoderGlobalState::Impl {
          };
      }
  
@@ -22,7 +22,7 @@ index 3f802c109..1c6512907 100644
  
      // Resets all internal tracking info.
      // Assumes that the heavyweight cleanup operations have already happened.
-@@ -11594,6 +11594,27 @@ class VkDecoderGlobalState::Impl {
+@@ -13023,6 +13023,27 @@ class VkDecoderGlobalState::Impl {
          mLinearImageProperties GUARDED_BY(mMutex);
  };
  

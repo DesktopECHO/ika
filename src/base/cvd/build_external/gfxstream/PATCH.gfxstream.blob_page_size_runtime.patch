@@ -8,10 +8,10 @@ helper's host page size (upstream raises it further to the driver's
 minImportedHostPointerAlignment where it imports host pointers), and the
 mapping guard checks the mapped address against the real page size.
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index e6036f52d..31fdac5a2 100644
+index 6d9c43169..0d6e5d1f9 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -7613,8 +7613,10 @@ class VkDecoderGlobalState::Impl {
+@@ -8557,8 +8557,10 @@ class VkDecoderGlobalState::Impl {
          }
  
          if (info->needUnmap) {
@@ -25,7 +25,7 @@ index e6036f52d..31fdac5a2 100644
              uint64_t alignedHva = hva & kPageMaskForBlob;
  
 diff --git a/host/vulkan/vk_memory_allocation_helper.cpp b/host/vulkan/vk_memory_allocation_helper.cpp
-index ebfff45fd..fe3afd663 100644
+index ebd669b77..d20c5ff79 100644
 --- a/host/vulkan/vk_memory_allocation_helper.cpp
 +++ b/host/vulkan/vk_memory_allocation_helper.cpp
 @@ -192,7 +192,10 @@ VkResult selectHostVisibleSharedMemoryStrategy(const VkMemoryAllocationHelper& h

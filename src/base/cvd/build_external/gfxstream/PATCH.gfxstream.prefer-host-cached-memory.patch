@@ -36,10 +36,10 @@ index 312bd1bac..911469643 100644
          "VulkanExternalMemoryMode",
          "A string specifying the ExternalMemoryMode for VkEmulation to use, "
 diff --git a/host/vulkan/vk_memory_allocation_helper.cpp b/host/vulkan/vk_memory_allocation_helper.cpp
-index fe3afd663..9bf663d47 100644
+index d20c5ff79..bb2fdd6d0 100644
 --- a/host/vulkan/vk_memory_allocation_helper.cpp
 +++ b/host/vulkan/vk_memory_allocation_helper.cpp
-@@ -656,6 +656,47 @@ VkResult VkMemoryAllocationHelper::selectStrategy(
+@@ -681,6 +681,47 @@ VkResult VkMemoryAllocationHelper::selectStrategy(
              return VK_ERROR_INCOMPATIBLE_DRIVER;
          }
          outPlan->hostMemoryInfo = *hostMemoryInfoOpt;

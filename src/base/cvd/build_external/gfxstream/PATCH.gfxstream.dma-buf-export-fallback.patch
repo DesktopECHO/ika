@@ -7,7 +7,7 @@ not have, so every exportable allocation failed there
 could not start on lavapipe: "Failed to find memory type for ColorBuffers".
 Opaque file descriptors are what gfxstream shares ColorBuffers with.
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
-index 8925f1cf8..ee3a2765c 100644
+index 4250d441d..2d747ae4e 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
 @@ -13,6 +13,7 @@
@@ -18,7 +18,7 @@ index 8925f1cf8..ee3a2765c 100644
  #include <inttypes.h>
  #include <stdio.h>
  #include <string.h>
-@@ -2663,6 +2664,22 @@ bool VkEmulation::allocExternalMemory(VulkanDispatch* vk, VkEmulation::ExternalM
+@@ -2743,6 +2744,22 @@ bool VkEmulation::allocExternalMemory(VulkanDispatch* vk, VkEmulation::ExternalM
      while (!memoryAllocated) {
          VkResult allocRes = vk->vkAllocateMemory(mDevice, &allocInfo, nullptr, &info->memory);
  

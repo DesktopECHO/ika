@@ -15,11 +15,8 @@ of its own, as each render thread submitted on its own before: with one set
 for every process, SurfaceFlinger composing a window over a game waited for
 the game's whole backlog in each vkCreateBuffer, and 3DMark Steel Nomad Light
 in a window showed about a frame a second while it rendered at 25.
-vkQueueSubmit marks its fence waitable before it takes the fence's mutex
-instead of while holding the global lock, since waitForFences takes the two
-in the other order and a submit on the submit thread can now meet the
-SyncThread waiting on its fence.
 diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
+index e78c2f9f9..d67d7b72d 100644
 --- a/host/vulkan/vk_decoder.cpp
 +++ b/host/vulkan/vk_decoder.cpp
 @@ -36,6 +36,12 @@
@@ -291,7 +288,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
          switch (opcode) {
  #ifdef VK_BASE_VERSION_1_0
              case OP_vkCreateInstance: {
-@@ -3846,6 +4070,7 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -3545,6 +3769,7 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                                     (unsigned long long)commandPool, (unsigned long long)flags);
                  }
                  VkResult vkResetCommandPool_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -299,7 +296,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                  if (CC_LIKELY(vk)) {
                      vkResetCommandPool_VkResult_return = m_state->on_vkResetCommandPool(
                          &m_pool, snapshotApiCallHandle, device, commandPool, flags);
-@@ -23048,7 +23273,31 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -22254,7 +22479,31 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                          ioStream, (unsigned long long)queue, (unsigned long long)submitCount,
                          (unsigned long long)pSubmits, (unsigned long long)fence);
                  }
@@ -332,7 +329,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                      m_state->on_vkQueueSubmitAsyncGOOGLE(&m_pool, snapshotApiCallHandle, queue,
                                                           submitCount, pSubmits, fence);
                  }
-@@ -23283,7 +23532,21 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -22489,7 +22738,21 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  }
                  if (m_queueSubmitWithCommandsEnabled)
                      seqnoPtr->fetch_add(1, std::memory_order_seq_cst);
@@ -355,7 +352,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                      m_state->on_vkQueueFlushCommandsGOOGLE(&m_pool, snapshotApiCallHandle, queue,
                                                             commandBuffer, dataSize, pData, context);
                  }
-@@ -23543,7 +23806,22 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -22746,7 +23009,22 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                          ioStream, (unsigned long long)queue, (unsigned long long)waitSemaphoreCount,
                          (unsigned long long)pWaitSemaphores, (unsigned long long)image);
                  }
@@ -379,7 +376,7 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                      m_state->on_vkQueueSignalReleaseImageANDROIDAsyncGOOGLE(
                          &m_pool, snapshotApiCallHandle, queue, waitSemaphoreCount, pWaitSemaphores,
                          image);
-@@ -23878,7 +24156,31 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -23062,7 +23340,31 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                          ioStream, (unsigned long long)queue, (unsigned long long)submitCount,
                          (unsigned long long)pSubmits, (unsigned long long)fence);
                  }
@@ -413,48 +410,10 @@ diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
                                                            submitCount, pSubmits, fence);
                  }
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index f0858ad9d..842809cc5 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -8392,6 +8392,8 @@ class VkDecoderGlobalState::Impl {
- 
-         DeviceOpWaitable queueCompletedWaitable = builder.OnQueueSubmittedWithFence(usedFence);
- 
-+        std::mutex* fenceMutex = nullptr;
-+        std::condition_variable* fenceCv = nullptr;
-         {
-             std::lock_guard<std::mutex> lock(mMutex);
-             // Update image layouts
-@@ -8437,17 +8439,24 @@ class VkDecoderGlobalState::Impl {
-             // waitForFence() on this fence.
-             auto* fenceInfo = gfxstream::base::find(mFenceInfo, fence);
-             if (fenceInfo) {
--                {
--                    std::unique_lock<std::mutex> fenceLock(fenceInfo->mutex);
--                    fenceInfo->state = FenceInfo::State::kWaitable;
--                }
--                fenceInfo->cv.notify_all();
-+                // waitForFences takes the fence's mutex before mMutex, so the
-+                // fence's mutex is taken only after mMutex is released below.
-+                // The state is read under mMutex.
-+                fenceInfo->state = FenceInfo::State::kWaitable;
-+                fenceMutex = &fenceInfo->mutex;
-+                fenceCv = &fenceInfo->cv;
-                 // Also update the latestUse waitable for this fence, to ensure
-                 // it is not asynchronously destroyed before all the waitables
-                 // referencing it
-                 fenceInfo->latestUse = queueCompletedWaitable;
-             }
-         }
-+        if (fenceMutex) {
-+            // A waiter checks the state holding the fence's mutex, so taking it
-+            // here means the waiter either sees kWaitable or is already waiting.
-+            { std::lock_guard<std::mutex> fenceLock(*fenceMutex); }
-+            fenceCv->notify_all();
-+        }
- 
-         if (!releasedColorBuffers.empty()) {
-             // Presentation images are not expected to use timeline semaphores. In case of this
-@@ -10305,6 +10314,12 @@ class VkDecoderGlobalState::Impl {
+@@ -11487,6 +11487,12 @@ class VkDecoderGlobalState::Impl {
          });
      }
  
@@ -464,10 +423,10 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
 +        return cmdBufferInfo ? (uint64_t)cmdBufferInfo->cmdPool : 0;
 +    }
 +
-     VkResult waitForFence(VkFence fence, uint64_t timeout) {
-         VkDevice device;
-         VulkanDispatch* vk;
-@@ -13439,6 +13454,10 @@ VkResult VkDecoderGlobalState::on_vkSetDebugUtilsObjectTagEXT(
+     // Called with mMutex held whenever an exportable host fence is bound to a boxed handle.
+     void registerSyncFdFence(VkFence fence) {
+         std::lock_guard<std::mutex> lock(mSyncFdFencesMutex);
+@@ -14938,6 +14944,10 @@ VkResult VkDecoderGlobalState::on_vkSetDebugUtilsObjectTagEXT(
  
  void VkDecoderGlobalState::on_DeviceLost() { mImpl->on_DeviceLost(); }
  
@@ -475,19 +434,20 @@ diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_gl
 +    return mImpl->commandPoolOf(commandBuffer);
 +}
 +
- VkResult VkDecoderGlobalState::waitForFence(VkFence boxed_fence, uint64_t timeout) {
-     VkFence fence = unbox_VkFence(boxed_fence);
-     return mImpl->waitForFence(fence, timeout);
+ VkDecoderGlobalState::SyncFdFence VkDecoderGlobalState::acquireSyncFdFence(
+     Boxed<VkFence> boxed_fence) {
+     return mImpl->acquireSyncFdFence(boxed_fence);
 diff --git a/host/vulkan/vk_decoder_global_state.h b/host/vulkan/vk_decoder_global_state.h
+index 57a49b6b3..c1b38dd74 100644
 --- a/host/vulkan/vk_decoder_global_state.h
 +++ b/host/vulkan/vk_decoder_global_state.h
-@@ -1011,6 +1011,9 @@ class VkDecoderGlobalState {
- 
-     void on_DeviceLost();
+@@ -1066,6 +1066,9 @@ class VkDecoderGlobalState {
+     // the fence could not be resolved, or if its device has been destroyed since.
+     VkResult waitForSyncFdFence(const SyncFdFence& fence, uint64_t timeout);
  
 +    // The command pool of an unboxed command buffer, 0 if unknown.
 +    uint64_t commandPoolOf(VkCommandBuffer commandBuffer);
 +
-     // Fence waits
-     VkResult waitForFence(VkFence boxed_fence, uint64_t timeout);
- 
+     // Wait for present (vkQueueSignalReleaseImageANDROID). This explicitly
+     // requires the image to be presented again versus how many times it's been
+     // presented so far, so it ends up incrementing a "target present count"

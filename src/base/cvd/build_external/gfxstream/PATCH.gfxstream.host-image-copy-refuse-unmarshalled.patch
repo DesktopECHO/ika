@@ -7,10 +7,10 @@ aliases and hides host image copy from guests unless
 BypassVulkanDeviceFeatureOverrides is on, but the core Vulkan 1.4 commands
 still reach the driver.
 diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
-index 1bf659bae..c55c5623d 100644
+index 39eb8d2ec..f1e72f1fc 100644
 --- a/host/vulkan/vk_decoder.cpp
 +++ b/host/vulkan/vk_decoder.cpp
-@@ -13192,8 +13192,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -12612,8 +12612,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  }
                  VkResult vkCopyMemoryToImage_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
                  if (CC_LIKELY(vk)) {
@@ -33,7 +33,7 @@ index 1bf659bae..c55c5623d 100644
                  }
                  if ((vkCopyMemoryToImage_VkResult_return) == VK_ERROR_DEVICE_LOST)
                      m_state->on_DeviceLost();
-@@ -13239,8 +13251,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+@@ -12659,8 +12671,20 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                  }
                  VkResult vkCopyImageToMemory_VkResult_return = VK_ERROR_OUT_OF_HOST_MEMORY;
                  if (CC_LIKELY(vk)) {

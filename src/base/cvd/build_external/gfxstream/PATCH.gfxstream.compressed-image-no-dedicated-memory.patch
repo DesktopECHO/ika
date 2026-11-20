@@ -7,10 +7,10 @@ the D3D12 device (DXGI_ERROR_INVALID_CALL); 3DMark Sling Shot Extreme crashed.
 The allocation plan's VkMemoryDedicatedAllocateInfo is dropped after
 VkMemoryAllocationHelper::selectStrategy.
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 90ee20659..68104a522 100644
+index a71daf2e4..6a686b27e 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -7107,6 +7107,20 @@ class VkDecoderGlobalState::Impl {
+@@ -8026,6 +8026,20 @@ class VkDecoderGlobalState::Impl {
              return planResult;
          }
  

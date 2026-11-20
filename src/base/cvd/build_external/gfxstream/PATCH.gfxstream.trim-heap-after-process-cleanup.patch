@@ -5,7 +5,7 @@ in its arenas, so the memory a closed app (a 3D game) used stayed resident in
 the renderer; trimming handed over 100 MB back in a test on an Apple Silicon
 host. Linux/glibc only.
 diff --git a/host/frame_buffer.cpp b/host/frame_buffer.cpp
-index c4f1f6c74..7cb799b8b 100644
+index 9663eaae6..d242cad4c 100644
 --- a/host/frame_buffer.cpp
 +++ b/host/frame_buffer.cpp
 @@ -20,6 +20,9 @@
@@ -18,7 +18,7 @@ index c4f1f6c74..7cb799b8b 100644
  #endif
  #include <time.h>
  
-@@ -2437,8 +2440,15 @@ void FrameBuffer::Impl::signalGuestProcessDead(uint64_t puid) {
+@@ -2530,8 +2533,15 @@ void FrameBuffer::Impl::signalGuestProcessDead(uint64_t puid) {
          processResources->setGuestProcessDead(true);
      }
  

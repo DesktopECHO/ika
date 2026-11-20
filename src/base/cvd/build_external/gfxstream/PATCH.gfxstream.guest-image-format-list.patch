@@ -9,7 +9,7 @@ are no views. An image the guest binds to a ColorBuffer's memory must be laid
 out as the ColorBuffer's own image, which has no list: with one, Honeykrisp
 compresses the image and the two would read the memory differently.
 diff --git a/host/vulkan/cereal/common/vk_struct_id.h b/host/vulkan/cereal/common/vk_struct_id.h
-index 6c05fbc..8565360 100644
+index 6c05fbca3..856536090 100644
 --- a/host/vulkan/cereal/common/vk_struct_id.h
 +++ b/host/vulkan/cereal/common/vk_struct_id.h
 @@ -39,6 +39,8 @@ REGISTER_VK_STRUCT_ID(VkDebugUtilsMessengerCreateInfoEXT,
@@ -22,10 +22,10 @@ index 6c05fbc..8565360 100644
  REGISTER_VK_STRUCT_ID(VkNativeBufferANDROID, VK_STRUCTURE_TYPE_NATIVE_BUFFER_ANDROID);
  REGISTER_VK_STRUCT_ID(VkExternalMemoryBufferCreateInfo,
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 5db692f..a591e31 100644
+index 842809cc5..5d86100e3 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -3683,6 +3683,9 @@ class VkDecoderGlobalState::Impl {
+@@ -3882,6 +3882,9 @@ class VkDecoderGlobalState::Impl {
                  cmpInfo->setGpuDecodeUnavailable();
              }
              decompInfo = cmpInfo->getOutputCreateInfo(*pCreateInfo);
@@ -35,7 +35,7 @@ index 5db692f..a591e31 100644
              pCreateInfo = &decompInfo;
          }
  
-@@ -10477,6 +10480,10 @@ class VkDecoderGlobalState::Impl {
+@@ -11810,6 +11813,10 @@ class VkDecoderGlobalState::Impl {
              if (!colorBufferVkImageCi) {
                  continue;
              }

@@ -6,10 +6,10 @@ TransferFromHost use it, which the Vulkan guest path rarely sends, so every
 guest color buffer used to cost a full extra copy of host memory. The buffer
 keeps its size (the attached iovs' total) and zero-filled initial contents.
 diff --git a/host/virtio_gpu_resource.cpp b/host/virtio_gpu_resource.cpp
-index d081e70af..e4011df69 100644
+index e3081dc76..833ca45af 100644
 --- a/host/virtio_gpu_resource.cpp
 +++ b/host/virtio_gpu_resource.cpp
-@@ -364,7 +364,24 @@ void VirtioGpuResource::AttachIov(struct iovec* iov, uint32_t num_iovs) {
+@@ -412,7 +412,24 @@ void VirtioGpuResource::AttachIov(struct iovec* iov, uint32_t num_iovs) {
          }
          mIovs.push_back(iov[i]);
      }
@@ -34,7 +34,7 @@ index d081e70af..e4011df69 100644
      if (linearSize > 0) {
          mLinear.resize(linearSize, 0);
      }
-@@ -520,6 +537,8 @@ int VirtioGpuResource::TransferRead(uint64_t offset, stream_renderer_box* box,
+@@ -568,6 +585,8 @@ int VirtioGpuResource::TransferRead(uint64_t offset, stream_renderer_box* box,
          return -EINVAL;
      }
  
@@ -43,7 +43,7 @@ index d081e70af..e4011df69 100644
      // First, copy from the underlying backend resource to this resource's linear buffer:
      int ret = 0;
      if (mResourceType == VirtioGpuResourceType::BLOB) {
-@@ -560,6 +579,8 @@ int VirtioGpuResource::TransferWrite(uint64_t offset, stream_renderer_box* box,
+@@ -608,6 +627,8 @@ int VirtioGpuResource::TransferWrite(uint64_t offset, stream_renderer_box* box,
          return -EINVAL;
      }
  
@@ -53,10 +53,10 @@ index d081e70af..e4011df69 100644
      int ret = 0;
      if (iovs) {
 diff --git a/host/virtio_gpu_resource.h b/host/virtio_gpu_resource.h
-index 8c5fe19b6..8f91eb013 100644
+index 6ab279adb..2966cd856 100644
 --- a/host/virtio_gpu_resource.h
 +++ b/host/virtio_gpu_resource.h
-@@ -111,6 +111,8 @@ class VirtioGpuResource {
+@@ -115,6 +115,8 @@ class VirtioGpuResource {
  
     private:
      int ReadFromPipeToLinear(uint64_t offset, stream_renderer_box* box);

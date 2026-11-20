@@ -6,10 +6,10 @@ the previous one left them out, and this patch passed on the command-free ones
 under the same rule (3DMark Steel Nomad checks VK_KHR_spirv_1_4 and
 VK_KHR_shader_float_controls by name).
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index e3a7c5c8b..1dde4d13e 100644
+index f79a6c30a..c63d22fca 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -165,6 +165,61 @@ static constexpr const char* const kEmulatedInstanceExtensions[] = {
+@@ -224,6 +224,61 @@ static constexpr const char* const kEmulatedInstanceExtensions[] = {
      VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME,
  };
  
@@ -71,7 +71,7 @@ index e3a7c5c8b..1dde4d13e 100644
  // Compressed-texture emulation expands one guest image into several host images. Sparse binds
  // describe only the guest-visible image, so sparse compressed images require the native path.
  static constexpr VkImageCreateFlags kSparseImageCreateFlags =
-@@ -2429,6 +2484,15 @@ class VkDecoderGlobalState::Impl {
+@@ -2629,6 +2684,15 @@ class VkDecoderGlobalState::Impl {
              return result;
          }
  
@@ -87,7 +87,7 @@ index e3a7c5c8b..1dde4d13e 100644
          // Remove all extensions that are not supported by the host codegen to prevent
          // guest to host compatibility issues:
          std::unordered_set<std::string> allowedDeviceExtensions =
-@@ -2449,7 +2513,9 @@ class VkDecoderGlobalState::Impl {
+@@ -2649,7 +2713,9 @@ class VkDecoderGlobalState::Impl {
              std::remove_if(properties.begin(), properties.end(),
                             [&](const VkExtensionProperties& extension) {
                                 return allowedDeviceExtensions.find(extension.extensionName) ==

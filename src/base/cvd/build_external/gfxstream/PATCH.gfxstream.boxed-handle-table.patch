@@ -7,9 +7,10 @@ command buffer, so the threads decoding and recording for a guest queued on
 that mutex. The array now holds 65536 handles (4 MB), and the map past it is
 read under a read-write lock, which lookups share.
 diff --git a/common/base/include/gfxstream/containers/HybridEntityManager.h b/common/base/include/gfxstream/containers/HybridEntityManager.h
+index 5f3c90acb..7eba25429 100644
 --- a/common/base/include/gfxstream/containers/HybridEntityManager.h
 +++ b/common/base/include/gfxstream/containers/HybridEntityManager.h
-@@ -54,7 +54,7 @@
+@@ -54,7 +54,7 @@ public:
              }
          }
  
@@ -18,16 +19,16 @@ diff --git a/common/base/include/gfxstream/containers/HybridEntityManager.h b/co
          if (mIndexForMap == 0) {
              mIndexForMap = maxIndex;
          }
-@@ -75,7 +75,7 @@
+@@ -75,7 +75,7 @@ public:
              SeqLock::ScopedWrite sw(&mEntityManagerLock);
-             return mEntityManager.addFixed(index, data, type);
+             return mEntityManager.addFixed(index, std::move(data), type);
          } else {
 -            AutoLock lock(mMapLock);
 +            AutoWriteLock lock(mMapLock);
              // Fixed allocations require us to update mIndexForMap to catch up with it.
              mIndexForMap = std::max(index_u64 + 1, mIndexForMap);
-             auto emplaced = mMap.emplace(index_u64, data);
-@@ -94,7 +94,7 @@
+             auto emplaced = mMap.emplace(index_u64, std::move(data));
+@@ -94,7 +94,7 @@ public:
              mEntityManager.clear();
          }
          {
@@ -36,7 +37,7 @@ diff --git a/common/base/include/gfxstream/containers/HybridEntityManager.h b/co
              mMap.clear();
              mIndexForMap = 0;
          }
-@@ -106,7 +106,7 @@
+@@ -106,7 +106,7 @@ public:
              SeqLock::ScopedWrite sw(&mEntityManagerLock);
              mEntityManager.remove(index);
          } else {
@@ -45,7 +46,7 @@ diff --git a/common/base/include/gfxstream/containers/HybridEntityManager.h b/co
              mMap.erase(index_u64);
          }
      }
-@@ -117,7 +117,7 @@
+@@ -117,7 +117,7 @@ public:
              SeqLock::ScopedWrite sw(&mEntityManagerLock);
              return mEntityManager.get(index);
          } else {
@@ -54,7 +55,7 @@ diff --git a/common/base/include/gfxstream/containers/HybridEntityManager.h b/co
              auto res = gfxstream::base::find(mMap, index_u64);
              return res;
          }
-@@ -131,7 +131,7 @@
+@@ -131,7 +131,7 @@ public:
                  res = mEntityManager.get_const(index));
              return res;
          } else {
@@ -63,34 +64,43 @@ diff --git a/common/base/include/gfxstream/containers/HybridEntityManager.h b/co
              auto res = gfxstream::base::find(mMap, index_u64);
              return res;
          }
-@@ -157,7 +157,7 @@
+@@ -149,7 +149,7 @@ public:
+             SeqLock::ScopedWrite sw(&mEntityManagerLock);
+             return func(mEntityManager.get(index));
+         } else {
+-            AutoLock lock(mMapLock);
++            AutoWriteLock lock(mMapLock);
+             return func(gfxstream::base::find(mMap, index_u64));
+         }
+     }
+@@ -174,7 +174,7 @@ public:
              mEntityManager.forEach(func);
          }
  
 -        AutoLock lock(mMapLock);
 +        AutoReadLock lock(mMapLock);
-         for (auto it : mMap) {
+         for (auto& it : mMap) {
              auto handle = index2Handle(it.first);
              func(true /* live */, handle, handle, it.second);
-@@ -170,7 +170,7 @@
+@@ -187,7 +187,7 @@ public:
              mEntityManager.forEachLiveEntry(func);
          }
  
 -        AutoLock lock(mMapLock);
 +        AutoReadLock lock(mMapLock);
-         for (auto it : mMap) {
+         for (auto& it : mMap) {
              auto handle = index2Handle(it.first);
              func(true /* live */, handle, it.second);
-@@ -184,7 +184,7 @@
+@@ -201,7 +201,7 @@ public:
                  func(live, h, d));
          });
  
 -        AutoLock lock(mMapLock);
 +        AutoReadLock lock(mMapLock);
-         for (const auto it : mMap) {
+         for (const auto& it : mMap) {
              auto handle = index2Handle(it.first);
              func(true /* live */, handle, it.second);
-@@ -200,7 +200,7 @@
+@@ -217,7 +217,7 @@ private:
      std::unordered_map<IndexType, Data> mMap;
      uint64_t mIndexForMap = 0;
      mutable SeqLock mEntityManagerLock;
@@ -100,9 +110,10 @@ diff --git a/common/base/include/gfxstream/containers/HybridEntityManager.h b/co
  
  } // namespace gfxstream
 diff --git a/host/vulkan/vulkan_boxed_handles.h b/host/vulkan/vulkan_boxed_handles.h
+index d1b91bd84..b73a658cf 100644
 --- a/host/vulkan/vulkan_boxed_handles.h
 +++ b/host/vulkan/vulkan_boxed_handles.h
-@@ -83,14 +83,14 @@
+@@ -123,14 +123,14 @@ class BoxedHandleInfo {
  class BoxedHandleManager {
     public:
      // The hybrid entity manager uses a sequence lock to protect access to
@@ -122,5 +133,5 @@ diff --git a/host/vulkan/vulkan_boxed_handles.h b/host/vulkan/vulkan_boxed_handl
 +    // running application share this table.
 +    using Store = gfxstream::base::HybridEntityManager<65536, BoxedHandle, BoxedHandleInfo>;
  
-     BoxedHandle add(const BoxedHandleInfo& item, BoxedHandleTypeTag tag);
+     BoxedHandle add(BoxedHandleInfo item, BoxedHandleTypeTag tag);
  

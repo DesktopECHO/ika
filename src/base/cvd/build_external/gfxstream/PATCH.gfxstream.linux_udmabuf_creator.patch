@@ -6,7 +6,7 @@ was present and readable. Selecting UdmabufCreator_linux.cpp on Linux keeps the
 stub for other hosts while allowing gfxstream to create udmabuf-backed dma-buf
 handles for host-visible Vulkan memory.
 diff --git a/common/base/BUILD.bazel b/common/base/BUILD.bazel
-index d404d4cc6..26778f01f 100644
+index b40358f50..84c21712a 100644
 --- a/common/base/BUILD.bazel
 +++ b/common/base/BUILD.bazel
 @@ -63,9 +63,15 @@ cc_library(
@@ -23,6 +23,6 @@ index d404d4cc6..26778f01f 100644
 +            "UdmabufCreator_stub.cpp",
 +        ],
 +    }) + select({
-         "@platforms//os:windows": [
-             "SharedMemory_win32.cpp",
-             "Thread_win32.cpp",
+         "@platforms//os:android": [
+             "SharedMemory_posix.cpp",
+             "Thread_pthread.cpp",

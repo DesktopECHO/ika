@@ -1,21 +1,21 @@
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 5010ddaa0..6804234a8 100644
+index 9c268008a..657e7049c 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -1794,6 +1794,12 @@ class VkDecoderGlobalState::Impl {
-                     physicalDevices[i], &queueFamilyPropCount,
-                     queueFamilyProperties.data());
+@@ -1917,6 +1917,12 @@ class VkDecoderGlobalState::Impl {
+             vk->vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyPropCount,
+                                                          queueFamilyProperties.data());
  
-+                if (shouldDisableSparseBindingSupport(physicalDevices[i], vk)) {
-+                    for (auto& queueFamilyProperty : queueFamilyProperties) {
-+                        queueFamilyProperty.queueFlags &= ~VK_QUEUE_SPARSE_BINDING_BIT;
-+                    }
++            if (shouldDisableSparseBindingSupport(physicalDevice, vk)) {
++                for (auto& queueFamilyProperty : queueFamilyProperties) {
++                    queueFamilyProperty.queueFlags &= ~VK_QUEUE_SPARSE_BINDING_BIT;
 +                }
++            }
 +
-                 physdevInfo.queuePropertiesHelper =
-                     std::make_unique<EmulatedPhysicalDeviceQueueProperties>(
-                         queueFamilyProperties,
-@@ -1817,10 +1823,12 @@ class VkDecoderGlobalState::Impl {
+             physdevInfo.queuePropertiesHelper =
+                 std::make_unique<EmulatedPhysicalDeviceQueueProperties>(queueFamilyProperties,
+                                                                         getFeatures());
+@@ -1987,10 +1993,12 @@ class VkDecoderGlobalState::Impl {
  
          vk->vkGetPhysicalDeviceFeatures(physicalDevice, pFeatures);
  
@@ -29,7 +29,7 @@ index 5010ddaa0..6804234a8 100644
              pFeatures->sparseBinding = VK_FALSE;
              pFeatures->sparseResidencyBuffer = VK_FALSE;
              pFeatures->sparseResidencyImage2D = VK_FALSE;
-@@ -1869,6 +1877,9 @@ class VkDecoderGlobalState::Impl {
+@@ -2039,6 +2047,9 @@ class VkDecoderGlobalState::Impl {
              vk->vkGetPhysicalDeviceFeatures(physicalDevice, &pFeatures->features);
          }
  
@@ -39,7 +39,7 @@ index 5010ddaa0..6804234a8 100644
          pFeatures->features.textureCompressionETC2 |= enableEmulatedEtc2();
          pFeatures->features.textureCompressionASTC_LDR |= enableEmulatedAstc();
  
-@@ -1942,7 +1953,7 @@ class VkDecoderGlobalState::Impl {
+@@ -2112,7 +2123,7 @@ class VkDecoderGlobalState::Impl {
              }
          }
  
@@ -48,7 +48,7 @@ index 5010ddaa0..6804234a8 100644
              pFeatures->features.sparseBinding = VK_FALSE;
              pFeatures->features.sparseResidencyBuffer = VK_FALSE;
              pFeatures->features.sparseResidencyImage2D = VK_FALSE;
-@@ -2548,6 +2559,8 @@ class VkDecoderGlobalState::Impl {
+@@ -2735,6 +2746,8 @@ class VkDecoderGlobalState::Impl {
          const bool emulateTextureEtc2 = needEmulatedEtc2(physicalDevice, vk);
          const bool emulateTextureAstc = needEmulatedAstc(physicalDevice, vk);
          const bool emulateProtectedMemory = needEmulatedProtectedMemory(physicalDevice, vk);
@@ -57,7 +57,7 @@ index 5010ddaa0..6804234a8 100644
          VkPhysicalDeviceFeatures featuresFiltered;
          std::vector<VkPhysicalDeviceFeatures*> featuresToFilter;
  
-@@ -2697,7 +2710,7 @@ class VkDecoderGlobalState::Impl {
+@@ -2884,7 +2897,7 @@ class VkDecoderGlobalState::Impl {
                  feature->robustBufferAccess = VK_TRUE;
              }
  
@@ -66,7 +66,7 @@ index 5010ddaa0..6804234a8 100644
                  GFXSTREAM_WARNING("Unsupported sparse binding feature is requested.");
                  return VK_ERROR_FEATURE_NOT_PRESENT;
              }
-@@ -3109,13 +3122,13 @@ class VkDecoderGlobalState::Impl {
+@@ -3300,13 +3313,13 @@ class VkDecoderGlobalState::Impl {
          VkPhysicalDevice boxed_physicalDevice, VkFormat format, VkImageType type,
          VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageTiling tiling,
          uint32_t* pPropertyCount, VkSparseImageFormatProperties* pProperties) {
@@ -83,7 +83,7 @@ index 5010ddaa0..6804234a8 100644
          return vk->vkGetPhysicalDeviceSparseImageFormatProperties(
              physicalDevice, format, type, samples, usage, tiling, pPropertyCount, pProperties);
      }
-@@ -3125,13 +3138,13 @@ class VkDecoderGlobalState::Impl {
+@@ -3316,13 +3329,13 @@ class VkDecoderGlobalState::Impl {
          VkPhysicalDevice boxed_physicalDevice,
          const VkPhysicalDeviceSparseImageFormatInfo2* pFormatInfo, uint32_t* pPropertyCount,
          VkSparseImageFormatProperties2* pProperties) {
@@ -100,7 +100,7 @@ index 5010ddaa0..6804234a8 100644
          return vk->vkGetPhysicalDeviceSparseImageFormatProperties2(physicalDevice, pFormatInfo,
                                                                     pPropertyCount, pProperties);
      }
-@@ -3141,13 +3154,13 @@ class VkDecoderGlobalState::Impl {
+@@ -3332,13 +3345,13 @@ class VkDecoderGlobalState::Impl {
          VkPhysicalDevice boxed_physicalDevice,
          const VkPhysicalDeviceSparseImageFormatInfo2* pFormatInfo, uint32_t* pPropertyCount,
          VkSparseImageFormatProperties2* pProperties) {
@@ -117,7 +117,7 @@ index 5010ddaa0..6804234a8 100644
          return vk->vkGetPhysicalDeviceSparseImageFormatProperties2KHR(physicalDevice, pFormatInfo,
                                                                        pPropertyCount, pProperties);
      }
-@@ -10612,6 +10625,24 @@ class VkDecoderGlobalState::Impl {
+@@ -11976,6 +11989,24 @@ class VkDecoderGlobalState::Impl {
          return (m_vkEmulation->getAstcLdrEmulationMode() != AstcEmulationMode::Disabled);
      }
  

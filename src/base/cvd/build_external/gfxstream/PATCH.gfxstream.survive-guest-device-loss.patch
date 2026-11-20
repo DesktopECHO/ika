@@ -44,10 +44,10 @@ index 019b8e6ef..c5c9da54d 100644
              }));
  
 diff --git a/host/vulkan/vk_android_native_buffer_operations.cpp b/host/vulkan/vk_android_native_buffer_operations.cpp
-index ad99fc20a..e70b34e25 100644
+index c46a9803f..a4c95291e 100644
 --- a/host/vulkan/vk_android_native_buffer_operations.cpp
 +++ b/host/vulkan/vk_android_native_buffer_operations.cpp
-@@ -596,7 +596,7 @@ VkResult AndroidNativeBufferInfo::on_vkAcquireImageANDROID(VkEmulation* emu, Vul
+@@ -656,7 +656,7 @@ VkResult AndroidNativeBufferInfo::on_vkAcquireImageANDROID(VkEmulation* emu, Vul
              semaphore == VK_NULL_HANDLE ? nullptr : &semaphore,
          };
          std::lock_guard<std::mutex> qlock(*defaultQueueMutex);
@@ -56,7 +56,7 @@ index ad99fc20a..e70b34e25 100644
          return VK_SUCCESS;
      }
  
-@@ -671,7 +671,7 @@ VkResult AndroidNativeBufferInfo::on_vkAcquireImageANDROID(VkEmulation* emu, Vul
+@@ -731,7 +731,7 @@ VkResult AndroidNativeBufferInfo::on_vkAcquireImageANDROID(VkEmulation* emu, Vul
  
          std::lock_guard<std::mutex> queueLock(*queueState.queueMutex);
          // TODO(kaiyili): initiate ownership transfer from DisplayVk here
@@ -65,7 +65,7 @@ index ad99fc20a..e70b34e25 100644
      } else {
          const VkSubmitInfo submitInfo = {
              VK_STRUCTURE_TYPE_SUBMIT_INFO,
-@@ -685,7 +685,7 @@ VkResult AndroidNativeBufferInfo::on_vkAcquireImageANDROID(VkEmulation* emu, Vul
+@@ -745,7 +745,7 @@ VkResult AndroidNativeBufferInfo::on_vkAcquireImageANDROID(VkEmulation* emu, Vul
              semaphore == VK_NULL_HANDLE ? nullptr : &semaphore,
          };
          std::lock_guard<std::mutex> queueLock(*queueState.queueMutex);
@@ -74,7 +74,7 @@ index ad99fc20a..e70b34e25 100644
      }
  
      return VK_SUCCESS;
-@@ -853,7 +853,7 @@ VkResult AndroidNativeBufferInfo::on_vkQueueSignalReleaseImageANDROID(
+@@ -913,7 +913,7 @@ VkResult AndroidNativeBufferInfo::on_vkQueueSignalReleaseImageANDROID(
      // TODO(kaiyili): initiate ownership transfer to DisplayVk here.
      VkFence qsriFence = mQsriWaitFencePool->getFenceFromPool();
      std::lock_guard<std::mutex> qLock(*queueMutex);
@@ -83,7 +83,7 @@ index ad99fc20a..e70b34e25 100644
      auto waitForQsriFenceTask = [this, vk, device = mDevice, qsriFence, traceId] {
          (void)traceId;
          GFXSTREAM_TRACE_EVENT(GFXSTREAM_TRACE_DEFAULT_CATEGORY, "Wait for QSRI fence",
-@@ -868,6 +868,9 @@ VkResult AndroidNativeBufferInfo::on_vkQueueSignalReleaseImageANDROID(
+@@ -928,6 +928,9 @@ VkResult AndroidNativeBufferInfo::on_vkQueueSignalReleaseImageANDROID(
              case VK_TIMEOUT:
                  VK_ANB_ERR("Timeout when waiting for the Qsri fence.");
                  break;
@@ -94,10 +94,10 @@ index ad99fc20a..e70b34e25 100644
                  GFXSTREAM_ERROR("Failed to wait for QSRI fence: %s\n", string_VkResult(res));
                  VK_CHECK(res);
 diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
-index 77dd140df..ef4773626 100644
+index c63d22fca..f0858ad9d 100644
 --- a/host/vulkan/vk_decoder_global_state.cpp
 +++ b/host/vulkan/vk_decoder_global_state.cpp
-@@ -4564,7 +4564,7 @@ class VkDecoderGlobalState::Impl {
+@@ -5131,7 +5131,7 @@ class VkDecoderGlobalState::Impl {
          }
  
          if (!cleanedFences.empty()) {
@@ -106,16 +106,16 @@ index 77dd140df..ef4773626 100644
                                         cleanedFences.data()));
          }
  
-@@ -4583,7 +4583,7 @@ class VkDecoderGlobalState::Impl {
-         for (auto fence : externalFences) {
-             VkFence replacement = deviceInfo->externalFencePool->pop(&createInfo);
+@@ -5157,7 +5157,7 @@ class VkDecoderGlobalState::Impl {
+             VkFence replacement = deviceInfo->externalFencePool->pop(
+                 &createInfo, [this](VkFence pooled) { return canRecycleExternalFence(pooled); });
              if (replacement == VK_NULL_HANDLE) {
 -                VK_CHECK(vk->vkCreateFence(device, &createInfo, 0, &replacement));
 +                VK_CHECK_GUEST_DEVICE(vk->vkCreateFence(device, &createInfo, 0, &replacement));
              }
-             deviceInfo->externalFencePool->add(fence);
  
-@@ -10221,9 +10221,15 @@ class VkDecoderGlobalState::Impl {
+             fenceInfoIt->second.boxed = {};
+@@ -11414,9 +11414,15 @@ class VkDecoderGlobalState::Impl {
          return VK_SUCCESS;
      }
  
