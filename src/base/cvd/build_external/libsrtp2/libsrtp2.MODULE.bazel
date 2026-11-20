@@ -2,8 +2,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 
 git_repository(
     name = "libsrtp2",
-    # This is quite old, but it's what libwebrtc depends on
-    commit = "860492290f7d1f25e2bd45da6471bfd4cd4d7add",
     build_file = "@//build_external/libsrtp2:BUILD.libsrtp2.bazel",
+    commit = "448c27f9d976330f42f000000d6a0719b63dd073",  # v2.8.2
     remote = "https://github.com/cisco/libsrtp",
 )

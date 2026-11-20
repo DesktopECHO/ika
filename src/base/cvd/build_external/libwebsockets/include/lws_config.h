@@ -9,8 +9,9 @@
 #define LWS_INSTALL_DATADIR "/usr/local/share"
 #define LWS_INSTALL_LIBDIR "/usr/local/lib"
 #define LWS_LIBRARY_VERSION_MAJOR 4
-#define LWS_LIBRARY_VERSION_MINOR 3
-#define LWS_LIBRARY_VERSION_PATCH 0
+#define LWS_LIBRARY_VERSION_MINOR 5
+#define LWS_LIBRARY_VERSION_PATCH_ELABORATED 8
+#define LWS_LIBRARY_VERSION_PATCH 8
 
 /* LWS_LIBRARY_VERSION_NUMBER looks like 1005001 for e.g. version 1.5.1 */
 #define LWS_LIBRARY_VERSION_NUMBER (LWS_LIBRARY_VERSION_MAJOR * 1000000) + \
@@ -94,12 +95,14 @@
 /* #undef LWS_HAVE_SSL_EXTRA_CHAIN_CERTS */
 /* #undef LWS_HAVE_SSL_get0_alpn_selected */
 #define LWS_HAVE_SSL_CTX_EVP_PKEY_new_raw_private_key
+#define LWS_HAVE_SSL_set_tlsext_host_name
 /* #undef LWS_HAVE_SSL_set_alpn_protos */
 /* #undef LWS_HAVE_SSL_SET_INFO_CALLBACK */
 /* #undef LWS_HAVE_SSL_SESSION_set_time */
 /* #undef LWS_HAVE_SSL_SESSION_up_ref */
 /* #undef LWS_HAVE__STAT32I64 */
 #define LWS_HAVE_STDINT_H
+#define LWS_HAVE_SYS_TYPES_H
 /* #undef LWS_HAVE_SYS_CAPABILITY_H */
 #define LWS_HAVE_TIMEGM
 /* #undef LWS_HAVE_TLS_CLIENT_METHOD */
@@ -107,7 +110,7 @@
 #define LWS_HAVE_SUSECONDS_T
 /* #undef LWS_HAVE_UV_VERSION_H */
 #define LWS_HAVE_VFORK
-#define LWS_LIBRARY_VERSION "4.3.0"
+#define LWS_LIBRARY_VERSION "4.5.8"
 #define LWS_HAVE_X509_get_key_usage
 #define LWS_HAVE_X509_VERIFY_PARAM_set1_host
 #define LWS_LOGGING_BITFIELD_CLEAR 0
