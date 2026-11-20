@@ -242,8 +242,10 @@ static list_vtable *vtable_info(void *list) {
   return nullptr;
 }
 
-/* Called by every thunk: records the call and returns the original method. */
-extern "C" __attribute__((visibility("hidden"))) void *ika_cl_record(void *list, long slot, uint64_t arg) {
+#if defined(__x86_64__)
+/* Called by every thunk: records the call and returns the original method.
+ * Only the assembly below calls it, so link-time optimization must keep it. */
+extern "C" __attribute__((visibility("hidden"), used)) void *ika_cl_record(void *list, long slot, uint64_t arg) {
   record(list, (int)slot, arg);
   return vtable_info(list)->original[slot];
 }
@@ -321,6 +323,11 @@ static bool make_thunks() {
   thunks = p;
   return true;
 }
+#else
+/* The thunks are x86-64 code; WSL2, where the tracer is for, is x86-64. */
+static unsigned char *thunks;
+static bool make_thunks() { return false; }
+#endif
 
 static volatile int close_reports;
 
@@ -525,7 +532,11 @@ extern "C" void ika_cltrace_hook_device(void *device) {
   slot_create_list1 = slot_of(&ID3D12Device4::CreateCommandList1);
   slot_execute = slot_of(&ID3D12CommandQueue::ExecuteCommandLists);
   if (!make_thunks()) {
+#if defined(__x86_64__)
     report("cannot make the call thunks");
+#else
+    report("IKA_D3D12_CLTRACE works on x86-64 only");
+#endif
     return;
   }
   void *device4 = nullptr;
