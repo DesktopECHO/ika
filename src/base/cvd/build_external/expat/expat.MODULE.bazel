@@ -5,6 +5,7 @@ archive_override(
         "MODULE.bazel": "//build_external/expat:internal.MODULE.bazel",
         "expat_config.h": "//build_external/expat:expat_config.h",
     },
-    strip_prefix = "expat-2.6.4",
-    urls = ["https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.bz2"],
+    integrity = "sha256-ROATkBXxyZCNCHa1UWI1E28WsUky2PZjShZzehJ0L1M=",
+    strip_prefix = "expat-2.10.0",
+    urls = ["https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.bz2"],
 )

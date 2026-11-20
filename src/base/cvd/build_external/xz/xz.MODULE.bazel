@@ -1,6 +1,15 @@
-single_version_override(
+# xz 5.8.4, newer than the Bazel Central Registry's 5.4.5: the registry's
+# 5.4.5.bcr.5 build file trimmed to liblzma on Linux, with config.h from
+# xz's own ./configure.
+archive_override(
     module_name = "xz",
-    version = "5.4.5.bcr.5",
-    patch_strip = 1,
-    patches = ["@//build_external/xz:bazel9.patch"],
+    build_file = "@//build_external/xz:BUILD.xz.bazel",
+    files = {
+        "MODULE.bazel": "@//build_external/xz:internal.MODULE.bazel",
+        "config.lzma-linux-aarch64.h": "@//build_external/xz:config.lzma-linux-aarch64.h",
+        "config.lzma-linux-x86_64.h": "@//build_external/xz:config.lzma-linux-x86_64.h",
+    },
+    integrity = "sha256-ABTHiGkwRU/ovUIoZltRr1XurlYOoTXJxM0z9Vslkdk=",
+    strip_prefix = "xz-5.8.4",
+    urls = ["https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz"],
 )
