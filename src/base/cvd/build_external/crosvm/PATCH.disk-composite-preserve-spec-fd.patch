@@ -1,6 +1,8 @@
+diff --git a/src/composite.rs b/src/composite.rs
+index c5bd1fa72..23be25421 100644
 --- a/src/composite.rs
 +++ b/src/composite.rs
-@@ -22,6 +22,7 @@
+@@ -22,6 +22,7 @@ use std::sync::atomic::Ordering;
  use std::sync::Arc;
  
  use async_trait::async_trait;
@@ -8,7 +10,7 @@
  use base::AsRawDescriptors;
  use base::FileAllocate;
  use base::FileReadWriteAtVolatile;
-@@ -352,10 +353,14 @@
+@@ -374,10 +375,14 @@ impl FileReadWriteAtVolatile for CompositeDiskFile {
  
  impl AsRawDescriptors for CompositeDiskFile {
      fn as_raw_descriptors(&self) -> Vec<RawDescriptor> {
@@ -27,7 +29,7 @@
      }
  }
  
-@@ -1043,10 +1048,12 @@
+@@ -1069,10 +1074,12 @@ mod tests {
          let file1 = tempfile().unwrap();
          let file2 = tempfile().unwrap();
          let file3 = tempfile().unwrap();
@@ -40,9 +42,9 @@
          ];
          in_descriptors.sort_unstable();
          let disk_part1 = ComponentDiskPart {
-@@ -1070,7 +1077,7 @@
+@@ -1096,7 +1103,7 @@ mod tests {
              file_offset: 0,
-             needs_flush: AtomicBool::new(false),
+             needs_flush: Arc::new(AtomicBool::new(false)),
          };
 -        let composite = new_from_components(vec![disk_part1, disk_part2, disk_part3]).unwrap();
 +        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3], spec_file).unwrap();

@@ -1,5 +1,5 @@
 diff --git a/disk/src/composite.rs b/disk/src/composite.rs
-index acecd85c04..3e7ec8aa58 100644
+index c5bd1fa72..16116bcc4 100644
 --- a/disk/src/composite.rs
 +++ b/disk/src/composite.rs
 @@ -4,6 +4,8 @@
@@ -11,7 +11,7 @@ index acecd85c04..3e7ec8aa58 100644
  use std::collections::HashSet;
  use std::convert::TryInto;
  use std::fs::File;
-@@ -133,6 +135,50 @@ impl ComponentDiskPart {
+@@ -144,6 +146,50 @@ impl ComponentDiskPart {
      }
  }
  
@@ -62,7 +62,7 @@ index acecd85c04..3e7ec8aa58 100644
  /// Represents a composite virtual disk made out of multiple component files. This is described on
  /// disk by a protocol buffer file that lists out the component file locations and their offsets
  /// and lengths on the virtual disk. The spaces covered by the component disks must be contiguous
-@@ -203,6 +248,7 @@ impl CompositeDiskFile {
+@@ -224,6 +270,7 @@ impl CompositeDiskFile {
          if proto.version > COMPOSITE_DISK_VERSION {
              return Err(Error::UnknownVersion(proto.version));
          }
@@ -70,7 +70,7 @@ index acecd85c04..3e7ec8aa58 100644
          let mut disks: Vec<ComponentDiskPart> = proto
              .component_disks
              .iter()
-@@ -228,18 +274,19 @@ impl CompositeDiskFile {
+@@ -245,18 +292,19 @@ impl CompositeDiskFile {
                  //         part (the proto does not have fields for it).
                  //    (b)  this override of sorts always matches the correct user intent.
                  Ok(ComponentDiskPart {
@@ -102,7 +102,7 @@ index acecd85c04..3e7ec8aa58 100644
                      offset: disk.offset,
                      length: 0, // Assigned later
                      file_offset: disk.file_offset,
-@@ -848,7 +896,7 @@ mod tests {
+@@ -874,7 +922,7 @@ mod tests {
      use std::matches;
  
      use base::AsRawDescriptor;
@@ -111,9 +111,9 @@ index acecd85c04..3e7ec8aa58 100644
  
      use super::*;
  
-@@ -1637,4 +1685,47 @@ mod tests {
-         );
-         assert!(matches!(result, Err(Error::DuplicatePartitionLabel(label)) if label == "label"));
+@@ -1752,4 +1800,47 @@ mod tests {
+             .unwrap();
+         assert_eq!(output, input);
      }
 +
 +    #[test]

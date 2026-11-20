@@ -1,6 +1,6 @@
 # this needs to be at parity with with build_external/crosvm/crosvm.config.toml
 CROSVM_REMOTE = "https://chromium.googlesource.com/crosvm/crosvm"
-CROSVM_REV = "cc8f3df618349b5e62318b927dcacf2687359c5d"
+CROSVM_REV = "6cd01368f309b6ebc79bad027a2ac4828439833b"
 MINIGBM_REMOTE = "https://chromium.googlesource.com/chromiumos/platform/minigbm"
 MINIGBM_REV = "a2d42f09d696b04e6ded5ad38596d8554ffd8988"
 

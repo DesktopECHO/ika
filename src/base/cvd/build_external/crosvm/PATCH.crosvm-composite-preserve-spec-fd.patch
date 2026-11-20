@@ -1,5 +1,5 @@
 diff --git a/disk/src/composite.rs b/disk/src/composite.rs
-index 3e7ec8aa58..97b87b5d44 100644
+index 16116bcc4..07506e130 100644
 --- a/disk/src/composite.rs
 +++ b/disk/src/composite.rs
 @@ -24,6 +24,7 @@ use std::sync::atomic::Ordering;
@@ -10,7 +10,7 @@ index 3e7ec8aa58..97b87b5d44 100644
  use base::AsRawDescriptors;
  use base::FileAllocate;
  use base::FileReadWriteAtVolatile;
-@@ -397,10 +398,14 @@ impl FileReadWriteAtVolatile for CompositeDiskFile {
+@@ -422,10 +423,14 @@ impl FileReadWriteAtVolatile for CompositeDiskFile {
  
  impl AsRawDescriptors for CompositeDiskFile {
      fn as_raw_descriptors(&self) -> Vec<RawDescriptor> {
@@ -29,7 +29,7 @@ index 3e7ec8aa58..97b87b5d44 100644
      }
  }
  
-@@ -1069,10 +1074,12 @@ mod tests {
+@@ -1114,10 +1119,12 @@ mod tests {
  
      #[test]
      fn triple_file_descriptors() {
@@ -42,9 +42,9 @@ index 3e7ec8aa58..97b87b5d44 100644
              file1.as_raw_descriptor(),
              file2.as_raw_descriptor(),
              file3.as_raw_descriptor(),
-@@ -1098,7 +1105,8 @@ mod tests {
+@@ -1144,7 +1151,8 @@ mod tests {
              file_offset: 0,
-             needs_flush: AtomicBool::new(false),
+             needs_flush: Arc::new(AtomicBool::new(false)),
          };
 -        let composite = new_from_components(vec![disk_part1, disk_part2, disk_part3]).unwrap();
 +        let composite =
