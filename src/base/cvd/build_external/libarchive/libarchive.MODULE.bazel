@@ -1,0 +1,18 @@
+# libarchive 3.8.11, newer than the Bazel Central Registry's 3.8.1: the
+# registry's 3.8.1.bcr.3 build files, trimmed to what Ika builds (bsdcpio).
+archive_override(
+    module_name = "libarchive",
+    build_file = "@//build_external/libarchive:BUILD.libarchive_root.bazel",
+    files = {
+        "MODULE.bazel": "@//build_external/libarchive:internal.MODULE.bazel",
+        "bazel/BUILD.bazel": "@//build_external/libarchive:BUILD.libarchive_bazel.bazel",
+        "bazel/config.bzl": "@//build_external/libarchive:config.bzl",
+        "cpio/BUILD.bazel": "@//build_external/libarchive:BUILD.libarchive_cpio.bazel",
+        "libarchive/BUILD.bazel": "@//build_external/libarchive:BUILD.libarchive_lib.bazel",
+        "libarchive_bazel_generic_config.h": "@//build_external/libarchive:libarchive_bazel_generic_config.h",
+        "libarchive_fe/BUILD.bazel": "@//build_external/libarchive:BUILD.libarchive_fe.bazel",
+    },
+    integrity = "sha256-o9wIcrGznaNNwY7xuUTw8R/9N0JdcK4EvmeSefHPQ9I=",
+    strip_prefix = "libarchive-3.8.11",
+    urls = ["https://github.com/libarchive/libarchive/releases/download/v3.8.11/libarchive-3.8.11.tar.xz"],
+)

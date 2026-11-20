@@ -1,0 +1,21 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//bazel:config.bzl", "PLATFORM_LOCAL_DEFINES")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "archive_fe",
+    hdrs = glob(["*.h"]),
+    srcs = glob(["*.c"]),
+    defines = PLATFORM_LOCAL_DEFINES,
+    deps = [
+        "//:config",
+        "//libarchive:internal_hdrs",  # lafe_setmode.c includes archive_platform.h
+    ],
+    strip_include_prefix = ".",
+)
+
+alias(
+    name = "libarchive_fe",
+    actual = ":archive_fe",
+)

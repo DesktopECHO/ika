@@ -1,0 +1,15 @@
+load("//cuttlefish/bazel:rules.bzl", "cf_build_test")
+
+package(default_visibility = ["//:android_cuttlefish"])
+
+cf_build_test(
+    name = "cf_build_test",
+    srcs = [
+        "BUILD.libarchive_cpio.bazel",
+        "BUILD.libarchive_fe.bazel",
+        "BUILD.libarchive_lib.bazel",
+        "BUILD.libarchive_root.bazel",
+        "internal.MODULE.bazel",
+        "libarchive.MODULE.bazel",
+    ],
+)
