@@ -2,7 +2,7 @@
 CROSVM_REMOTE = "https://chromium.googlesource.com/crosvm/crosvm"
 CROSVM_REV = "6cd01368f309b6ebc79bad027a2ac4828439833b"
 MINIGBM_REMOTE = "https://chromium.googlesource.com/chromiumos/platform/minigbm"
-MINIGBM_REV = "a2d42f09d696b04e6ded5ad38596d8554ffd8988"
+MINIGBM_REV = "f61c8ce976a26769e951d126e1eeba851133590b"
 
 # note that this won't use the same source checkout as the git_repository directive below
 #
