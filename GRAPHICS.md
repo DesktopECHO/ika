@@ -695,7 +695,7 @@ partway through Geekbench's GPU test and through Steel Nomad Light. On Linux,
 ## Ika's Mesa
 
 Every Mesa Ika builds comes from the release in
-[src/tools/mesa/release.env](src/tools/mesa/release.env), Mesa 26.3.0 for
+[src/tools/mesa/release.env](src/tools/mesa/release.env), Mesa 26.3.1 for
 now: the ROM's guest drivers (gfxstream's Vulkan, Venus and Lavapipe), and in
 `ika-base` the host's Lavapipe and, on x86_64, the Dozen and D3D12 OpenGL
 drivers for WSL2. The host's GPU drivers stay the distribution's.

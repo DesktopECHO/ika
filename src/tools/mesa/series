@@ -16,7 +16,6 @@ dzn-uma-write-back.patch
 dzn-not-zeroed.patch
 dzn-persistent-map.patch
 dzn-disk-cache.patch
-dzn-queue-check.patch
 dzn-pso-disk-cache.patch
 dzn-fan-sizing.patch
 dzn-fan-restart-addr.patch

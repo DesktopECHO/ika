@@ -12,7 +12,7 @@ four of them for the command buffer's next recording, as the reset path's
 TODO asked.
 
 diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
-index 77f5582..b5c0bf9 100644
+index d354245..3be8437 100644
 --- a/src/microsoft/vulkan/dzn_cmd_buffer.c
 +++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
 @@ -453,6 +453,11 @@ dzn_cmd_buffer_destroy(struct vk_command_buffer *cbuf)
@@ -191,7 +191,7 @@ index 77f5582..b5c0bf9 100644
     D3D12_TEXTURE_COPY_LOCATION src_loc = {
        .pResource = src_res,
        .Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-@@ -3763,20 +3807,17 @@ dzn_cmd_buffer_update_heaps(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint)
+@@ -3762,20 +3806,17 @@ dzn_cmd_buffer_update_heaps(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint)
            (cmdbuf->state.bindpoint[bindpoint].dirty & DZN_CMD_BINDPOINT_DIRTY_DYNAMIC_BUFFERS)) {
           ID3D12Resource *dynamic_buffer_buf = NULL;
           uint64_t dynamic_buffer_buf_offset;
@@ -209,7 +209,7 @@ index 77f5582..b5c0bf9 100644
 +                                            &dynamic_buffer_buf_offset,
 +                                            (void **)&map);
           if (result != VK_SUCCESS)
-             return;
+             return result;
  
           uint64_t gpuva = ID3D12Resource_GetGPUVirtualAddress(dynamic_buffer_buf) + dynamic_buffer_buf_offset;
 -         struct dxil_spirv_bindless_entry *map;
@@ -218,7 +218,7 @@ index 77f5582..b5c0bf9 100644
  
           for (uint32_t s = 0; s < MAX_SETS; ++s) {
              const struct dzn_descriptor_set *set = desc_state->sets[s].set;
-@@ -3793,7 +3834,6 @@ dzn_cmd_buffer_update_heaps(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint)
+@@ -3792,7 +3833,6 @@ dzn_cmd_buffer_update_heaps(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint)
              }
           }
  
@@ -251,7 +251,7 @@ index 77f5582..b5c0bf9 100644
     /* TODO: VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT */
     if (index_size == 2) {
        uint16_t *indices = (uint16_t *)cpu_ptr;
-@@ -4940,24 +4974,16 @@ dzn_CmdFillBuffer(VkCommandBuffer commandBuffer,
+@@ -4945,24 +4979,16 @@ dzn_CmdFillBuffer(VkCommandBuffer commandBuffer,
  
     ID3D12Resource *src_res;
     uint64_t src_offset;
@@ -279,7 +279,7 @@ index 77f5582..b5c0bf9 100644
     ID3D12GraphicsCommandList1_CopyBufferRegion(cmdbuf->cmdlist, buf->res, dstOffset, src_res, src_offset, size);
  }
  
-@@ -4984,19 +5010,14 @@ dzn_CmdUpdateBuffer(VkCommandBuffer commandBuffer,
+@@ -4989,19 +5015,14 @@ dzn_CmdUpdateBuffer(VkCommandBuffer commandBuffer,
  
     ID3D12Resource *src_res;
     uint64_t src_offset;
@@ -303,7 +303,7 @@ index 77f5582..b5c0bf9 100644
  
     ID3D12GraphicsCommandList1_CopyBufferRegion(cmdbuf->cmdlist, buf->res, dstOffset, src_res, src_offset, size);
  }
-@@ -5944,20 +5965,14 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+@@ -5949,20 +5970,14 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
  
        ID3D12Resource *draw_buf;
        uint64_t offset;
@@ -329,7 +329,7 @@ index 77f5582..b5c0bf9 100644
        dzn_cmd_buffer_indirect_draw(cmdbuf, draw_buf, offset, NULL, 0, 1, sizeof(params), true);
        return;
 diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
-index acfd66b..dfd7547 100644
+index 1745167..d876fe6 100644
 --- a/src/microsoft/vulkan/dzn_private.h
 +++ b/src/microsoft/vulkan/dzn_private.h
 @@ -590,10 +590,15 @@ struct dzn_cmd_buffer_query_pool_state {

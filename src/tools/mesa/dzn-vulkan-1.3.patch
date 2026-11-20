@@ -12,7 +12,7 @@ shader model 6.6 or without wave operations keep reporting 1.2.
 Parts of this patch are the work of Cosmo (https://github.com/Cosmo/).
 
 diff --git a/src/microsoft/compiler/dxil_function.c b/src/microsoft/compiler/dxil_function.c
-index f5296a78997..da54ec3c4a8 100644
+index f5296a7..da54ec3 100644
 --- a/src/microsoft/compiler/dxil_function.c
 +++ b/src/microsoft/compiler/dxil_function.c
 @@ -34,7 +34,7 @@ struct predefined_func_descr {
@@ -34,7 +34,7 @@ index f5296a78997..da54ec3c4a8 100644
  {"dx.op.primitiveID", "i", "i", DXIL_ATTR_KIND_READ_NONE},
  {"dx.op.outputControlPointID", "i", "i", DXIL_ATTR_KIND_READ_NONE},
 diff --git a/src/microsoft/compiler/dxil_module.c b/src/microsoft/compiler/dxil_module.c
-index c70c67c4210..2ec4459450b 100644
+index c70c67c..2ec4459 100644
 --- a/src/microsoft/compiler/dxil_module.c
 +++ b/src/microsoft/compiler/dxil_module.c
 @@ -2179,7 +2179,8 @@ dxil_module_get_uav_res_props_const(struct dxil_module *m,
@@ -60,7 +60,7 @@ index c70c67c4210..2ec4459450b 100644
     }
  
 diff --git a/src/microsoft/compiler/dxil_module.h b/src/microsoft/compiler/dxil_module.h
-index 08ba263a17f..397b38ee95d 100644
+index 08ba263..397b38e 100644
 --- a/src/microsoft/compiler/dxil_module.h
 +++ b/src/microsoft/compiler/dxil_module.h
 @@ -454,7 +454,8 @@ dxil_module_get_uav_res_props_const(struct dxil_module *m,
@@ -74,7 +74,7 @@ index 08ba263a17f..397b38ee95d 100644
  const struct dxil_mdnode *
  dxil_get_metadata_string(struct dxil_module *m, const char *str);
 diff --git a/src/microsoft/compiler/dxil_nir.c b/src/microsoft/compiler/dxil_nir.c
-index 3bad5a48d3d..d71ff9cdf8c 100644
+index 3bad5a4..d71ff9c 100644
 --- a/src/microsoft/compiler/dxil_nir.c
 +++ b/src/microsoft/compiler/dxil_nir.c
 @@ -2582,10 +2582,10 @@ set_deref_variables_coherent(nir_shader *s, nir_deref_instr *deref)
@@ -110,7 +110,7 @@ index 3bad5a48d3d..d71ff9cdf8c 100644
              set_deref_variables_coherent(b->shader, nir_src_as_deref(intr->src[resource_idx]));
           else {
 diff --git a/src/microsoft/compiler/dxil_nir_algebraic.py b/src/microsoft/compiler/dxil_nir_algebraic.py
-index ef4ffe0c214..7d0010d76a9 100644
+index ef4ffe0..7d0010d 100644
 --- a/src/microsoft/compiler/dxil_nir_algebraic.py
 +++ b/src/microsoft/compiler/dxil_nir_algebraic.py
 @@ -62,7 +62,10 @@ def remove_unsupported_casts(arr, bit_size, mask, max_unsigned_float, min_signed
@@ -126,7 +126,7 @@ index ef4ffe0c214..7d0010d76a9 100644
              for inner_op_type in ('f2u', 'f2i'):
                  inner_op = inner_op_type + str(int(bit_size))
 diff --git a/src/microsoft/compiler/nir_to_dxil.c b/src/microsoft/compiler/nir_to_dxil.c
-index 8dd8f774895..5aea30a6af2 100644
+index 026e8d5..d6d5eaf 100644
 --- a/src/microsoft/compiler/nir_to_dxil.c
 +++ b/src/microsoft/compiler/nir_to_dxil.c
 @@ -183,6 +183,8 @@ dxil_get_nir_compiler_options(nir_shader_compiler_options *options,
@@ -192,7 +192,7 @@ index 8dd8f774895..5aea30a6af2 100644
        if (!unannotated_handle || !res_props)
           return false;
        handle = emit_annotate_handle(ctx, unannotated_handle, res_props);
-@@ -6071,6 +6104,8 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
+@@ -6072,6 +6105,8 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
           return false;
  
     } else if (ctx->opts->environment == DXIL_ENVIRONMENT_VULKAN) {
@@ -201,7 +201,7 @@ index 8dd8f774895..5aea30a6af2 100644
        /* Handle read/write SSBOs as UAVs */
        nir_foreach_variable_with_modes(var, ctx->shader, nir_var_mem_ssbo) {
           if ((var->data.access & ACCESS_NON_WRITEABLE) == 0) {
-@@ -6079,7 +6114,9 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
+@@ -6080,7 +6115,9 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
                 count = glsl_get_length(var->type);
              if (!emit_uav(ctx, var->data.binding, var->data.descriptor_set,
                          count, DXIL_COMP_TYPE_INVALID, 1,
@@ -212,7 +212,7 @@ index 8dd8f774895..5aea30a6af2 100644
                 return false;
              
           }
-@@ -6203,6 +6240,35 @@ get_dxil_shader_kind(struct nir_shader *s)
+@@ -6204,6 +6241,35 @@ get_dxil_shader_kind(struct nir_shader *s)
  static unsigned
  lower_bit_size_callback(const nir_instr* instr, void *data)
  {
@@ -248,7 +248,7 @@ index 8dd8f774895..5aea30a6af2 100644
     if (instr->type != nir_instr_type_alu)
        return 0;
     nir_alu_instr *alu = nir_instr_as_alu(instr);
-@@ -6214,8 +6280,6 @@ lower_bit_size_callback(const nir_instr* instr, void *data)
+@@ -6215,8 +6281,6 @@ lower_bit_size_callback(const nir_instr* instr, void *data)
        return 0;
  
     unsigned num_inputs = nir_op_infos[alu->op].num_inputs;
@@ -257,7 +257,7 @@ index 8dd8f774895..5aea30a6af2 100644
  
     unsigned ret = 0;
     for (unsigned i = 0; i < num_inputs; i++) {
-@@ -6394,7 +6458,8 @@ void dxil_fill_validation_state(struct ntd_context *ctx,
+@@ -6395,7 +6459,8 @@ void dxil_fill_validation_state(struct ntd_context *ctx,
        psv2->num_threads_x = MAX2(ctx->shader->info.workgroup_size[0], 1);
        psv2->num_threads_y = MAX2(ctx->shader->info.workgroup_size[1], 1);
        psv2->num_threads_z = MAX2(ctx->shader->info.workgroup_size[2], 1);
@@ -268,7 +268,7 @@ index 8dd8f774895..5aea30a6af2 100644
            ctx->shader->info.min_subgroup_size > 1) {
           psv0->max_expected_wave_lane_count = ctx->shader->info.min_subgroup_size;
 diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
-index 4763c346a58..cdfcc228624 100644
+index 4763c34..cdfcc22 100644
 --- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
 +++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
 @@ -56,6 +56,7 @@ spirv_caps = {
@@ -364,7 +364,7 @@ index 4763c346a58..cdfcc228624 100644
     } else {
        NIR_PASS(_, nir, nir_split_struct_vars, nir_var_mem_shared);
 diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir_lower_bindless.c b/src/microsoft/spirv_to_dxil/dxil_spirv_nir_lower_bindless.c
-index 31f8e47ea77..d83cd5296ea 100644
+index 906a6d9..e4c10b9 100644
 --- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir_lower_bindless.c
 +++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir_lower_bindless.c
 @@ -244,14 +244,12 @@ dxil_spirv_nir_lower_bindless(nir_shader *nir, struct dxil_spirv_nir_lower_bindl
@@ -385,7 +385,7 @@ index 31f8e47ea77..d83cd5296ea 100644
  
  /* Given a global deref chain that starts as a pointer value and ends with a load/store/atomic,
 diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
-index 211e0e448ac..84d8f10b49e 100644
+index 1e40c02..665033a 100644
 --- a/src/microsoft/vulkan/dzn_cmd_buffer.c
 +++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
 @@ -130,10 +130,11 @@ dzn_cmd_buffer_queue_transition_barriers(struct dzn_cmd_buffer *cmdbuf,
@@ -590,7 +590,7 @@ index 211e0e448ac..84d8f10b49e 100644
              view_instance_mask = 1;
  
           if (gfx->zsa.dynamic_depth_bias && gfx->use_gs_for_polygon_mode_point)
-@@ -3471,11 +3529,13 @@ dzn_cmd_buffer_update_viewports(struct dzn_cmd_buffer *cmdbuf)
+@@ -3476,11 +3534,13 @@ dzn_cmd_buffer_update_viewports(struct dzn_cmd_buffer *cmdbuf)
     const struct dzn_graphics_pipeline *pipeline =
        (const struct dzn_graphics_pipeline *)cmdbuf->state.pipeline;
  
@@ -607,7 +607,7 @@ index 211e0e448ac..84d8f10b49e 100644
  }
  
  static void
-@@ -3487,7 +3547,24 @@ dzn_cmd_buffer_update_scissors(struct dzn_cmd_buffer *cmdbuf)
+@@ -3492,7 +3552,24 @@ dzn_cmd_buffer_update_scissors(struct dzn_cmd_buffer *cmdbuf)
     if (!(cmdbuf->state.dirty & DZN_CMD_DIRTY_SCISSORS))
        return;
  
@@ -633,7 +633,7 @@ index 211e0e448ac..84d8f10b49e 100644
        /* Apply a scissor delimiting the render area. */
        ID3D12GraphicsCommandList1_RSSetScissorRects(cmdbuf->cmdlist, 1, &cmdbuf->state.render.area);
        return;
-@@ -3495,15 +3572,15 @@ dzn_cmd_buffer_update_scissors(struct dzn_cmd_buffer *cmdbuf)
+@@ -3500,15 +3577,15 @@ dzn_cmd_buffer_update_scissors(struct dzn_cmd_buffer *cmdbuf)
  
     D3D12_RECT scissors[MAX_SCISSOR];
  
@@ -652,7 +652,7 @@ index 211e0e448ac..84d8f10b49e 100644
  }
  
  static void
-@@ -3578,9 +3655,16 @@ dzn_cmd_buffer_update_zsa(struct dzn_cmd_buffer *cmdbuf)
+@@ -3583,9 +3660,16 @@ dzn_cmd_buffer_update_zsa(struct dzn_cmd_buffer *cmdbuf)
  static void
  dzn_cmd_buffer_update_blend_constants(struct dzn_cmd_buffer *cmdbuf)
  {
@@ -672,7 +672,7 @@ index 211e0e448ac..84d8f10b49e 100644
  }
  
  static void
-@@ -3596,12 +3680,17 @@ dzn_cmd_buffer_update_depth_bounds(struct dzn_cmd_buffer *cmdbuf)
+@@ -3601,12 +3685,17 @@ dzn_cmd_buffer_update_depth_bounds(struct dzn_cmd_buffer *cmdbuf)
  static void
  dzn_cmd_buffer_update_depth_bias(struct dzn_cmd_buffer *cmdbuf)
  {
@@ -694,7 +694,7 @@ index 211e0e448ac..84d8f10b49e 100644
     }
  }
  
-@@ -3687,7 +3776,7 @@ dzn_cmd_buffer_triangle_fan_rewrite_index(struct dzn_cmd_buffer *cmdbuf,
+@@ -3692,7 +3781,7 @@ dzn_cmd_buffer_triangle_fan_rewrite_index(struct dzn_cmd_buffer *cmdbuf,
     ASSERTED const struct dzn_graphics_pipeline *gfx_pipeline = (const struct dzn_graphics_pipeline *)
        cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
     ASSERTED bool prim_restart =
@@ -703,7 +703,7 @@ index 211e0e448ac..84d8f10b49e 100644
  
     assert(!prim_restart);
  
-@@ -3768,7 +3857,7 @@ dzn_cmd_buffer_triangle_fan_get_max_index_buf_size(struct dzn_cmd_buffer *cmdbuf
+@@ -3778,7 +3867,7 @@ dzn_cmd_buffer_triangle_fan_get_max_index_buf_size(struct dzn_cmd_buffer *cmdbuf
     struct dzn_graphics_pipeline *pipeline = (struct dzn_graphics_pipeline *)
        cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
  
@@ -712,7 +712,7 @@ index 211e0e448ac..84d8f10b49e 100644
        return 0;
  
     uint32_t max_triangles;
-@@ -4045,7 +4134,7 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+@@ -4055,7 +4144,7 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
        sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) :
        sizeof(D3D12_DRAW_ARGUMENTS);
     bool prim_restart =
@@ -721,7 +721,7 @@ index 211e0e448ac..84d8f10b49e 100644
  
     draw_buf_stride = draw_buf_stride ? draw_buf_stride : min_draw_buf_stride;
     assert(draw_buf_stride >= min_draw_buf_stride);
-@@ -4059,7 +4148,7 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+@@ -4069,7 +4158,7 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
     draw_type.indirect_count = count_buf != NULL;
     draw_type.draw_params = pipeline->needs_draw_sysvals && !pdev->options21.ExtendedCommandInfoSupported;
     draw_type.draw_id = max_draw_count > 1 && pdev->options21.ExecuteIndirectTier < D3D12_EXECUTE_INDIRECT_TIER_1_1;
@@ -730,7 +730,7 @@ index 211e0e448ac..84d8f10b49e 100644
     draw_type.triangle_fan_primitive_restart = draw_type.triangle_fan && prim_restart;
  
     if (draw_type.draw_params || draw_type.draw_id || draw_type.triangle_fan) {
-@@ -5062,16 +5151,26 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
+@@ -5080,16 +5169,26 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
           layout = s_att->imageLayout;
        }
  
@@ -762,7 +762,7 @@ index 211e0e448ac..84d8f10b49e 100644
                                              VK_REMAINING_ARRAY_LAYERS, 1,
                                              &cmdbuf->state.render.area);
           }
-@@ -5153,14 +5252,33 @@ dzn_CmdBindPipeline(VkCommandBuffer commandBuffer,
+@@ -5171,14 +5270,33 @@ dzn_CmdBindPipeline(VkCommandBuffer commandBuffer,
        if (!gfx->blend.dynamic_constants) {
           memcpy(cmdbuf->state.blend.constants, gfx->blend.constants,
                  sizeof(cmdbuf->state.blend.constants));
@@ -799,7 +799,7 @@ index 211e0e448ac..84d8f10b49e 100644
     }
  }
  
-@@ -5298,7 +5416,7 @@ dzn_CmdDraw(VkCommandBuffer commandBuffer,
+@@ -5316,7 +5434,7 @@ dzn_CmdDraw(VkCommandBuffer commandBuffer,
     uint32_t view_mask = pipeline->multiview.native_view_instancing ?
        1 : pipeline->multiview.view_mask;
  
@@ -808,7 +808,7 @@ index 211e0e448ac..84d8f10b49e 100644
        D3D12_INDEX_BUFFER_VIEW ib_view = cmdbuf->state.ib.view;
  
        VkResult result =
-@@ -5347,8 +5465,8 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+@@ -5367,8 +5485,8 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
     const struct dzn_graphics_pipeline *pipeline = (const struct dzn_graphics_pipeline *)
        cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
  
@@ -819,7 +819,7 @@ index 211e0e448ac..84d8f10b49e 100644
        /* The indexed+primitive-restart+triangle-fan combination is a mess,
         * since we have to walk the index buffer, skip entries with the
         * special 0xffff/0xffffffff values, and push triangle list indices
-@@ -5391,7 +5509,7 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+@@ -5411,7 +5529,7 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
  
     D3D12_INDEX_BUFFER_VIEW ib_view = cmdbuf->state.ib.view;
  
@@ -828,7 +828,7 @@ index 211e0e448ac..84d8f10b49e 100644
        VkResult result =
           dzn_cmd_buffer_triangle_fan_rewrite_index(cmdbuf, &indexCount, &firstIndex);
        if (result != VK_SUCCESS || !indexCount)
-@@ -5411,7 +5529,7 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+@@ -5432,7 +5550,7 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
     }
  
     /* Restore the IB view if we modified it when lowering triangle fans. */
@@ -837,7 +837,7 @@ index 211e0e448ac..84d8f10b49e 100644
        cmdbuf->state.ib.view = ib_view;
        cmdbuf->state.dirty |= DZN_CMD_DIRTY_IB;
     }
-@@ -5503,6 +5621,35 @@ dzn_CmdBindVertexBuffers(VkCommandBuffer commandBuffer,
+@@ -5524,6 +5642,35 @@ dzn_CmdBindVertexBuffers(VkCommandBuffer commandBuffer,
     BITSET_SET_COUNT(cmdbuf->state.vb.dirty, firstBinding, bindingCount);
  }
  
@@ -873,7 +873,7 @@ index 211e0e448ac..84d8f10b49e 100644
  VKAPI_ATTR void VKAPI_CALL
  dzn_CmdBindIndexBuffer(VkCommandBuffer commandBuffer,
                         VkBuffer buffer,
-@@ -6015,6 +6162,170 @@ dzn_CmdSetStencilWriteMask(VkCommandBuffer commandBuffer,
+@@ -6041,6 +6188,170 @@ dzn_CmdSetStencilWriteMask(VkCommandBuffer commandBuffer,
     cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |= DZN_CMD_BINDPOINT_DIRTY_PIPELINE;
  }
  
@@ -1045,7 +1045,7 @@ index 211e0e448ac..84d8f10b49e 100644
  dzn_CmdSetStencilReference(VkCommandBuffer commandBuffer,
                             VkStencilFaceFlags faceMask,
 diff --git a/src/microsoft/vulkan/dzn_descriptor_set.c b/src/microsoft/vulkan/dzn_descriptor_set.c
-index fe289ec7a99..8ce21a5e480 100644
+index c6a87ac..faa8724 100644
 --- a/src/microsoft/vulkan/dzn_descriptor_set.c
 +++ b/src/microsoft/vulkan/dzn_descriptor_set.c
 @@ -72,6 +72,7 @@ desc_type_to_range_type(VkDescriptorType in, bool writeable)
@@ -1116,7 +1116,7 @@ index fe289ec7a99..8ce21a5e480 100644
        vk_find_struct_const(pCreateInfo->pNext, DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO);
 @@ -537,19 +554,26 @@ dzn_GetDescriptorSetLayoutSupport(VkDevice _device,
  
-       if (binding_flags && binding_flags->bindingCount &&
+       if (variable_count && binding_flags && binding_flags->bindingCount &&
            (binding_flags->pBindingFlags[i] & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT))
 -         variable_count->maxVariableDescriptorCount = device->bindless ? INT32_MAX : upper_bound;
 +         variable_count->maxVariableDescriptorCount =
@@ -1557,7 +1557,7 @@ index fe289ec7a99..8ce21a5e480 100644
        case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
           for (uint32_t d = 0; d < entry->desc_count; d++) {
 diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
-index ac1ca26b6d3..daecd5bba04 100644
+index 3e2dbe2..d238d37 100644
 --- a/src/microsoft/vulkan/dzn_device.c
 +++ b/src/microsoft/vulkan/dzn_device.c
 @@ -58,7 +58,7 @@
@@ -1678,7 +1678,7 @@ index ac1ca26b6d3..daecd5bba04 100644
 +          SUCCEEDED(ID3D12Device1_CheckFeatureSupport(pdev->dev, feature, data, size));
 +}
 +
- static void
+ static bool
  dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
  {
 +   const struct dzn_instance *instance =
@@ -1686,8 +1686,8 @@ index ac1ca26b6d3..daecd5bba04 100644
     D3D_FEATURE_LEVEL checklist[] = {
        D3D_FEATURE_LEVEL_11_0,
        D3D_FEATURE_LEVEL_11_1,
-@@ -415,6 +448,9 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
-       D3D_SHADER_MODEL_6_4, D3D_SHADER_MODEL_6_3, D3D_SHADER_MODEL_6_2, D3D_SHADER_MODEL_6_1,
+@@ -417,6 +450,9 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+       D3D_SHADER_MODEL_6_0,
     };
     for (UINT i = 0; i < ARRAY_SIZE(valid_shader_models); ++i) {
 +      if ((uint32_t)valid_shader_models[i] > instance->max_shader_model)
@@ -1696,8 +1696,8 @@ index ac1ca26b6d3..daecd5bba04 100644
        D3D12_FEATURE_DATA_SHADER_MODEL shader_model = { valid_shader_models[i] };
        if (SUCCEEDED(ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model)))) {
           pdev->shader_model = shader_model.HighestShaderModel;
-@@ -435,23 +471,23 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
-    }
+@@ -442,23 +478,23 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+       return false;
  
     ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_ARCHITECTURE1, &pdev->architecture, sizeof(pdev->architecture));
 -   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS, &pdev->options, sizeof(pdev->options));
@@ -1733,7 +1733,7 @@ index ac1ca26b6d3..daecd5bba04 100644
        pdev->options21.ExecuteIndirectTier = D3D12_EXECUTE_INDIRECT_TIER_1_0;
     }
     {
-@@ -657,6 +693,15 @@ dzn_physical_device_get_max_array_layers()
+@@ -669,6 +705,15 @@ dzn_physical_device_get_max_array_layers()
     return dzn_physical_device_get_max_extent(false);
  }
  
@@ -1749,7 +1749,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  static void
  dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
                                   struct vk_features *features)
-@@ -665,8 +710,7 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+@@ -677,8 +722,7 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
  
     bool support_descriptor_indexing = pdev->shader_model >= D3D_SHADER_MODEL_6_6 &&
        !(instance->debug_flags & DZN_DEBUG_NO_BINDLESS);
@@ -1759,7 +1759,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  
     *features = (struct vk_features) {
        .robustBufferAccess = true, /* This feature is mandatory */
-@@ -710,7 +754,7 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+@@ -722,7 +766,7 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
        .shaderCullDistance = true,
        .shaderFloat64 = pdev->options.DoublePrecisionFloatShaderOps,
        .shaderInt64 = pdev->options1.Int64ShaderOps,
@@ -1768,7 +1768,7 @@ index ac1ca26b6d3..daecd5bba04 100644
        .shaderResourceResidency = false,
        .shaderResourceMinLod = false,
        .sparseBinding = false,
-@@ -725,8 +769,8 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+@@ -737,8 +781,8 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
        .variableMultisampleRate = false,
        .inheritedQueries = false,
  
@@ -1779,7 +1779,7 @@ index ac1ca26b6d3..daecd5bba04 100644
        .storagePushConstant16              = false,
        .storageInputOutput16               = false,
        .multiview                          = true,
-@@ -781,36 +825,50 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+@@ -793,36 +837,50 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
        .bufferDeviceAddress                = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
        .bufferDeviceAddressCaptureReplay   = false,
        .bufferDeviceAddressMultiDevice     = false,
@@ -1840,7 +1840,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  static void
  dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
                                     struct vk_properties *properties)
-@@ -827,7 +885,7 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
+@@ -839,7 +897,7 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
     }
  
     *properties = (struct vk_properties){
@@ -1849,7 +1849,7 @@ index ac1ca26b6d3..daecd5bba04 100644
        .driverVersion = vk_get_driver_version(),
  
        .vendorID = pdev->desc.vendor_id,
-@@ -1064,6 +1122,17 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
+@@ -1076,6 +1134,17 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
        .integerDotProduct4x8BitPackedUnsignedAccelerated = pdev->shader_model >= D3D_SHADER_MODEL_6_4,
        .integerDotProductAccumulatingSaturating4x8BitPackedSignedAccelerated = pdev->shader_model >= D3D_SHADER_MODEL_6_4,
        .integerDotProductAccumulatingSaturating4x8BitPackedUnsignedAccelerated = pdev->shader_model >= D3D_SHADER_MODEL_6_4,
@@ -1867,7 +1867,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  
        /* VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT */
        .maxVertexAttribDivisor = UINT32_MAX,
-@@ -1075,6 +1144,8 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
+@@ -1087,6 +1156,8 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
        .underlyingAPI = VK_LAYERED_DRIVER_UNDERLYING_API_D3D12_MSFT,
     };
  
@@ -1876,8 +1876,8 @@ index ac1ca26b6d3..daecd5bba04 100644
     if (strlen(instance->drirc.debug.force_vk_devicename) > 0) {
        snprintf(properties->deviceName,
                 sizeof(properties->deviceName),
-@@ -1155,24 +1226,30 @@ dzn_physical_device_create(struct vk_instance *instance,
-       return vk_error(instance, VK_ERROR_INITIALIZATION_FAILED);
+@@ -1163,28 +1234,33 @@ dzn_physical_device_create(struct vk_instance *instance,
+       goto fail_clean;
     }
  
 -   if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device10, (void **)&pdev->dev10)))
@@ -1898,10 +1898,14 @@ index ac1ca26b6d3..daecd5bba04 100644
 +      if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device13, (void **)&pdev->dev13)))
 +         pdev->dev13 = NULL;
 +   }
-    dzn_physical_device_cache_caps(pdev);
+    if (!dzn_physical_device_cache_caps(pdev)) {
+       result = VK_ERROR_INCOMPATIBLE_DRIVER;
+       goto fail_clean;
+    }
+ 
 -   dzn_physical_device_init_memory(pdev);
 -   dzn_physical_device_init_uuids(pdev);
- 
+-
     if (dzn_instance->debug_flags & DZN_DEBUG_MULTIVIEW)
        pdev->options3.ViewInstancingTier = D3D12_VIEW_INSTANCING_TIER_NOT_SUPPORTED;
 +   if (dzn_instance->debug_flags & DZN_DEBUG_NO_16BIT)
@@ -1919,7 +1923,7 @@ index ac1ca26b6d3..daecd5bba04 100644
        pdev->vk.supported_extensions.KHR_8bit_storage = true;
     if (dzn_instance->debug_flags & DZN_DEBUG_NO_BINDLESS)
        pdev->vk.supported_extensions.EXT_descriptor_indexing = false;
-@@ -1621,6 +1698,30 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
+@@ -1637,6 +1713,30 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
     return VK_SUCCESS;
  }
  
@@ -1950,7 +1954,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  VKAPI_ATTR void VKAPI_CALL
  dzn_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
                                         VkFormat format,
-@@ -1629,6 +1730,19 @@ dzn_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
+@@ -1645,6 +1745,19 @@ dzn_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
     VK_FROM_HANDLE(dzn_physical_device, pdev, physicalDevice);
  
     dzn_physical_device_get_format_properties(pdev, format, pFormatProperties);
@@ -1970,7 +1974,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  }
  
  VKAPI_ATTR VkResult VKAPI_CALL
-@@ -1815,6 +1929,14 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
+@@ -1853,6 +1966,14 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
     instance->debug_flags =
        parse_debug_string(os_get_option("DZN_DEBUG"), dzn_debug_options);
  
@@ -1985,7 +1989,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  #ifdef _WIN32
     if (instance->debug_flags & DZN_DEBUG_DEBUGGER) {
        /* wait for debugger to attach... */
-@@ -2255,6 +2377,17 @@ dzn_device_check_status(struct vk_device *dev)
+@@ -2291,6 +2412,17 @@ dzn_device_check_status(struct vk_device *dev)
     return VK_SUCCESS;
  }
  
@@ -2003,7 +2007,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  static VkResult
  dzn_device_create(struct dzn_physical_device *pdev,
                    const VkDeviceCreateInfo *pCreateInfo,
-@@ -2368,6 +2501,16 @@ dzn_device_create(struct dzn_physical_device *pdev,
+@@ -2404,6 +2536,16 @@ dzn_device_create(struct dzn_physical_device *pdev,
        ID3D12InfoQueue_Release(info_queue);
     }
  
@@ -2020,7 +2024,7 @@ index ac1ca26b6d3..daecd5bba04 100644
     IUnknown_QueryInterface(device->dev, &IID_ID3D12DeviceConfiguration, (void **)&device->dev_config);
  
     result = dzn_meta_init(device);
-@@ -3186,9 +3329,11 @@ dzn_buffer_get_copy_loc(const struct dzn_buffer *buf,
+@@ -3225,9 +3367,11 @@ dzn_buffer_get_copy_loc(const struct dzn_buffer *buf,
       },
     };
  
@@ -2033,7 +2037,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  
     loc.PlacedFootprint.Offset =
        region->bufferOffset + (layer * buffer_layer_stride);
-@@ -3309,6 +3454,25 @@ dzn_GetBufferMemoryRequirements2(VkDevice dev,
+@@ -3348,6 +3492,25 @@ dzn_GetBufferMemoryRequirements2(VkDevice dev,
     }
  }
  
@@ -2059,7 +2063,7 @@ index ac1ca26b6d3..daecd5bba04 100644
  VKAPI_ATTR VkResult VKAPI_CALL
  dzn_BindBufferMemory2(VkDevice _device,
                        uint32_t bindInfoCount,
-@@ -3700,6 +3864,15 @@ dzn_GetImageSparseMemoryRequirements2(VkDevice device,
+@@ -3739,6 +3902,15 @@ dzn_GetImageSparseMemoryRequirements2(VkDevice device,
     *pSparseMemoryRequirementCount = 0;
  }
  
@@ -2076,10 +2080,10 @@ index ac1ca26b6d3..daecd5bba04 100644
  dzn_CreateSamplerYcbcrConversion(VkDevice device,
                                   const VkSamplerYcbcrConversionCreateInfo *pCreateInfo,
 diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
-index f5d93c4df09..a846881c97f 100644
+index 5482028..58a3a2c 100644
 --- a/src/microsoft/vulkan/dzn_image.c
 +++ b/src/microsoft/vulkan/dzn_image.c
-@@ -925,6 +925,25 @@ dzn_GetImageMemoryRequirements2(VkDevice _device,
+@@ -939,6 +939,25 @@ dzn_GetImageMemoryRequirements2(VkDevice _device,
        pMemoryRequirements->memoryRequirements.size = D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT;
  }
  
@@ -2106,7 +2110,7 @@ index f5d93c4df09..a846881c97f 100644
  dzn_GetImageSubresourceLayout(VkDevice _device,
                                VkImage _image,
 diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
-index bbc05a0122f..8a209744e2d 100644
+index bbc05a0..8a20974 100644
 --- a/src/microsoft/vulkan/dzn_pipeline.c
 +++ b/src/microsoft/vulkan/dzn_pipeline.c
 @@ -38,6 +38,7 @@
@@ -2893,7 +2897,7 @@ index bbc05a0122f..8a209744e2d 100644
  
           /* Bail out on the first error != VK_PIPELINE_COMPILE_REQUIRED_EX as it
 diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
-index 9db280ca3f4..bb54e7bf293 100644
+index f3a9792..8b9e93f 100644
 --- a/src/microsoft/vulkan/dzn_private.h
 +++ b/src/microsoft/vulkan/dzn_private.h
 @@ -389,6 +389,36 @@ enum dzn_cmd_dirty {
@@ -3079,7 +3083,7 @@ index 9db280ca3f4..bb54e7bf293 100644
  struct dzn_compute_pipeline {
     struct dzn_pipeline base;
     struct {
-@@ -1259,6 +1356,8 @@ enum dzn_debug_flags {
+@@ -1260,6 +1357,8 @@ enum dzn_debug_flags {
     DZN_DEBUG_NO_BINDLESS = 1 << 11,
     DZN_DEBUG_EXPERIMENTAL = 1 << 12,
     DZN_DEBUG_MULTIVIEW = 1 << 13,
@@ -3088,7 +3092,7 @@ index 9db280ca3f4..bb54e7bf293 100644
  };
  
  struct dzn_instance {
-@@ -1271,6 +1370,8 @@ struct dzn_instance {
+@@ -1272,6 +1371,8 @@ struct dzn_instance {
        PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE serialize_root_sig;
     } d3d12;
     uint32_t debug_flags;
@@ -3098,7 +3102,7 @@ index 9db280ca3f4..bb54e7bf293 100644
     struct vk_sync_binary_type sync_binary_type;
  
 diff --git a/src/microsoft/vulkan/meson.build b/src/microsoft/vulkan/meson.build
-index 800fdc28608..198a0382607 100644
+index 800fdc2..198a038 100644
 --- a/src/microsoft/vulkan/meson.build
 +++ b/src/microsoft/vulkan/meson.build
 @@ -91,7 +91,7 @@ icd_file_name = libname_prefix + 'vulkan_dzn.' + libname_suffix
@@ -3120,7 +3124,7 @@ index 800fdc28608..198a0382607 100644
     '--icd-lib-path', meson.current_build_dir(),
     '--icd-filename', icd_file_name,
 diff --git a/src/vulkan/runtime/vk_frame_pacer.c b/src/vulkan/runtime/vk_frame_pacer.c
-index f116e85eafb..003099aaa57 100644
+index f116e85..003099a 100644
 --- a/src/vulkan/runtime/vk_frame_pacer.c
 +++ b/src/vulkan/runtime/vk_frame_pacer.c
 @@ -129,7 +129,7 @@ evaluate_frame(struct vk_frame_pacer *frame_pacer, struct vk_frame_time_info *fr

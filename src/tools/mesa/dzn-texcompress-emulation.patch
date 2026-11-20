@@ -2,10 +2,10 @@ dzn: Emulate ETC2 and ASTC textures with the common decoders
 
 Generated-by: LLM
 diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
-index 9d1f306..28c88f4 100644
+index 3496c55..9482372 100644
 --- a/src/microsoft/vulkan/dzn_cmd_buffer.c
 +++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
-@@ -4702,6 +4702,12 @@ dzn_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
+@@ -4706,6 +4706,12 @@ dzn_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
                            const VkCopyBufferToImageInfo2 *info)
  {
     VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
@@ -18,7 +18,7 @@ index 9d1f306..28c88f4 100644
  
     for (int i = 0; i < info->regionCount; i++) {
        const VkBufferImageCopy2 *region = info->pRegions + i;
-@@ -4718,6 +4724,12 @@ dzn_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
+@@ -4722,6 +4728,12 @@ dzn_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
                            const VkCopyImageToBufferInfo2 *info)
  {
     VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
@@ -31,7 +31,7 @@ index 9d1f306..28c88f4 100644
  
     for (int i = 0; i < info->regionCount; i++) {
        const VkBufferImageCopy2 *region = info->pRegions + i;
-@@ -4739,6 +4751,11 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
+@@ -4743,6 +4755,11 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
     VK_FROM_HANDLE(dzn_image, src, info->srcImage);
     VK_FROM_HANDLE(dzn_image, dst, info->dstImage);
  
@@ -44,10 +44,10 @@ index 9d1f306..28c88f4 100644
  
     bool requires_temp_res = false;
 diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
-index cd2dc35..ba01c9d 100644
+index 32e095f..c728d00 100644
 --- a/src/microsoft/vulkan/dzn_device.c
 +++ b/src/microsoft/vulkan/dzn_device.c
-@@ -750,8 +750,8 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+@@ -760,8 +760,8 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
        .alphaToOne = false,
        .multiViewport = false,
        .samplerAnisotropy = true,
@@ -58,7 +58,7 @@ index cd2dc35..ba01c9d 100644
        .textureCompressionBC = true,
        .occlusionQueryPrecise = true,
        .pipelineStatisticsQuery = true,
-@@ -1303,6 +1303,10 @@ dzn_physical_device_create(struct vk_instance *instance,
+@@ -1308,6 +1308,10 @@ dzn_physical_device_create(struct vk_instance *instance,
           }
        }
     }
@@ -69,7 +69,7 @@ index cd2dc35..ba01c9d 100644
     dzn_physical_device_get_features(pdev, &pdev->vk.supported_features);
     dzn_physical_device_get_properties(pdev, &pdev->vk.properties);
  
-@@ -1419,6 +1423,17 @@ dzn_physical_device_get_format_properties(struct dzn_physical_device *pdev,
+@@ -1428,6 +1432,17 @@ dzn_physical_device_get_format_properties(struct dzn_physical_device *pdev,
        vk_debug_ignored_stype(sType);
     }
  
@@ -87,7 +87,7 @@ index cd2dc35..ba01c9d 100644
     if (dfmt_info.Format == DXGI_FORMAT_UNKNOWN) {
        if (dzn_graphics_pipeline_patch_vi_format(format) != format)
           *base_props = (VkFormatProperties){
-@@ -1564,6 +1579,17 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
+@@ -1573,6 +1588,17 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
        }
     }
  
@@ -105,7 +105,7 @@ index cd2dc35..ba01c9d 100644
     if (external_info && external_info->handleType != 0) {
        const VkExternalMemoryHandleTypeFlags d3d12_resource_handle_types =
           VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT | opaque_external_flag;
-@@ -2423,6 +2449,7 @@ dzn_device_destroy(struct dzn_device *device, const VkAllocationCallbacks *pAllo
+@@ -2450,6 +2476,7 @@ dzn_device_destroy(struct dzn_device *device, const VkAllocationCallbacks *pAllo
     }
  
     dzn_device_query_finish(device);
@@ -113,7 +113,7 @@ index cd2dc35..ba01c9d 100644
     dzn_meta_finish(device);
  
     dzn_foreach_pool_type(type) {
-@@ -2610,6 +2637,8 @@ dzn_device_create(struct dzn_physical_device *pdev,
+@@ -2637,6 +2664,8 @@ dzn_device_create(struct dzn_physical_device *pdev,
  
     IUnknown_QueryInterface(device->dev, &IID_ID3D12DeviceConfiguration, (void **)&device->dev_config);
  
@@ -153,7 +153,7 @@ index 2155684..e261f52 100644
  
  def main():
 diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
-index 5b14cff..821f8a7 100644
+index ca23cc5..e3af235 100644
 --- a/src/microsoft/vulkan/dzn_image.c
 +++ b/src/microsoft/vulkan/dzn_image.c
 @@ -55,6 +55,8 @@ dzn_image_destroy(struct dzn_image *image,
@@ -165,7 +165,7 @@ index 5b14cff..821f8a7 100644
     if (image->res)
        ID3D12Resource_Release(image->res);
  
-@@ -115,6 +117,10 @@ dzn_image_create(struct dzn_device *device,
+@@ -132,6 +134,10 @@ dzn_image_create(struct dzn_device *device,
     vk_image_init(&device->vk, &image->vk, pCreateInfo);
     enum pipe_format pfmt = vk_format_to_pipe_format(image->vk.format);
  
@@ -176,7 +176,7 @@ index 5b14cff..821f8a7 100644
     VkImageUsageFlags usage = image->vk.usage | image->vk.stencil_usage;
  
     image->castable_formats = castable_formats;
-@@ -203,10 +209,14 @@ dzn_image_create(struct dzn_device *device,
+@@ -220,10 +226,14 @@ dzn_image_create(struct dzn_device *device,
           (pCreateInfo->samples > 1 ? D3D12_BARRIER_ACCESS_RESOLVE_SOURCE : 0);
     }
  
@@ -193,9 +193,9 @@ index 5b14cff..821f8a7 100644
     if (image->desc.SampleDesc.Count > 1)
        image->desc.Alignment = D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT;
     else
-@@ -265,6 +275,14 @@ dzn_image_create(struct dzn_device *device,
-        image->desc.SampleDesc.Count == 1)
-       image->desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+@@ -292,6 +302,14 @@ dzn_image_create(struct dzn_device *device,
+                        "D3D12 failed to determine image allocation requirements");
+    }
  
 +   if (emulated) {
 +      VkResult result = dzn_image_texcompress_init(device, image);
@@ -208,7 +208,7 @@ index 5b14cff..821f8a7 100644
     *out = dzn_image_to_handle(image);
     return VK_SUCCESS;
  }
-@@ -275,6 +293,9 @@ dzn_image_get_dxgi_format(const struct dzn_physical_device *pdev,
+@@ -302,6 +320,9 @@ dzn_image_get_dxgi_format(const struct dzn_physical_device *pdev,
                            VkImageUsageFlags usage,
                            VkImageAspectFlags aspects)
  {
@@ -218,7 +218,7 @@ index 5b14cff..821f8a7 100644
     enum pipe_format pfmt = vk_format_to_pipe_format(format);
  
     if (pdev && !pdev->support_a4b4g4r4) {
-@@ -863,6 +884,12 @@ dzn_BindImageMemory2(VkDevice dev,
+@@ -890,6 +911,12 @@ dzn_BindImageMemory2(VkDevice dev,
        }
        if (FAILED(hres))
           return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
@@ -286,7 +286,7 @@ index d9194aa..c6c53e6 100644
     struct dxil_spirv_metadata metadata = { 0 };
     ret = dzn_pipeline_get_nir_shader(device, layout, cache, nir_hash,
 diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
-index b7a9cfa..1dcce86 100644
+index 4d21ca2..5f8b6a5 100644
 --- a/src/microsoft/vulkan/dzn_private.h
 +++ b/src/microsoft/vulkan/dzn_private.h
 @@ -41,6 +41,7 @@
@@ -330,7 +330,7 @@ index b7a9cfa..1dcce86 100644
        struct dzn_pipeline *pipeline;
        ID3D12RootSignature *root_sig;
        struct dzn_descriptor_state desc_state;
-@@ -1250,8 +1261,64 @@ struct dzn_image {
+@@ -1251,8 +1262,64 @@ struct dzn_image {
     const DXGI_FORMAT *castable_formats;
  
     D3D12_BARRIER_ACCESS valid_access;

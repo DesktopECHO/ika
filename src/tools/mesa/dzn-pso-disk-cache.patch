@@ -22,18 +22,18 @@ corruption"): crosvm's GPU process died as gfxstream created its first
 pipeline, and Android never started.
 
 diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
-index d8c8fb7..ec12902 100644
+index 9e75c4b..6241b29 100644
 --- a/src/microsoft/vulkan/dzn_device.c
 +++ b/src/microsoft/vulkan/dzn_device.c
-@@ -482,6 +482,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
-    }
+@@ -489,6 +489,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+       return false;
  
     ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_ARCHITECTURE1, &pdev->architecture, sizeof(pdev->architecture));
 +   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_SHADER_CACHE, &pdev->shader_cache, sizeof(pdev->shader_cache));
     dzn_physical_device_get_options(pdev, 0, D3D12_FEATURE_D3D12_OPTIONS, &pdev->options, sizeof(pdev->options));
     dzn_physical_device_get_options(pdev, 1, D3D12_FEATURE_D3D12_OPTIONS1, &pdev->options1, sizeof(pdev->options1));
     dzn_physical_device_get_options(pdev, 2, D3D12_FEATURE_D3D12_OPTIONS2, &pdev->options2, sizeof(pdev->options2));
-@@ -2697,6 +2698,13 @@ dzn_device_create_root_sig(struct dzn_device *device,
+@@ -2726,6 +2727,13 @@ dzn_device_create_root_sig(struct dzn_device *device,
                                       ID3D10Blob_GetBufferSize(sig),
                                       &IID_ID3D12RootSignature,
                                       (void **)&root_sig);
@@ -48,7 +48,7 @@ index d8c8fb7..ec12902 100644
     return root_sig;
  }
 diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
-index 5f7f59b..a0ddefd 100644
+index c57dc8a..34c1507 100644
 --- a/src/microsoft/vulkan/dzn_private.h
 +++ b/src/microsoft/vulkan/dzn_private.h
 @@ -220,6 +220,7 @@ struct dzn_physical_device {

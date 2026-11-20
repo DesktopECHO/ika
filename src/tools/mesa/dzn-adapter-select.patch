@@ -14,26 +14,25 @@ the adapter with those IDs. If no adapter has them, make all of them and
 leave the choice to the layer.
 
 diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
-index ec12902..c75e838 100644
+index 6241b29..cad4710 100644
 --- a/src/microsoft/vulkan/dzn_device.c
 +++ b/src/microsoft/vulkan/dzn_device.c
-@@ -1918,13 +1918,42 @@ dzn_instance_add_physical_device(struct vk_instance *instance,
+@@ -1928,6 +1928,11 @@ dzn_instance_add_physical_device(struct vk_instance *instance,
         !desc->is_warp)
-       return VK_SUCCESS;
+       return VK_ERROR_INCOMPATIBLE_DRIVER;
  
 +   if (dzn_instance->adapter_filter &&
 +       (desc->vendor_id != dzn_instance->adapter_filter_vendor ||
 +        desc->device_id != dzn_instance->adapter_filter_device))
-+      return VK_SUCCESS;
++      return VK_ERROR_INCOMPATIBLE_DRIVER;
 +
     return dzn_physical_device_create(instance, adapter, desc);
  }
  
- static VkResult
- dzn_enumerate_physical_devices(struct vk_instance *instance)
- {
-+   struct dzn_instance *dzn_instance = container_of(instance, struct dzn_instance, vk);
-+
+@@ -1949,7 +1954,29 @@ dzn_enumerate_physical_devices(struct vk_instance *instance)
+    if (!dzn_instance->d3d12_mod)
+       return VK_SUCCESS;
+ 
 +   /* Making a physical device queries everything the adapter's D3D12 driver
 +    * reports, and wakes the adapter. When MESA_VK_DEVICE_SELECT names an
 +    * adapter by vendor and device ID with the "!" that hides the others, make
@@ -58,13 +57,13 @@ index ec12902..c75e838 100644
 +      result = dzn_enumerate_physical_devices_dxcore(instance);
 +   }
  #ifdef _WIN32
-    if (result != VK_SUCCESS)
-       result = dzn_enumerate_physical_devices_dxgi(instance);
+    if (result == VK_ERROR_INCOMPATIBLE_DRIVER ||
+        result == VK_ERROR_INITIALIZATION_FAILED)
 diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
-index 0fa4dc5..a26c8a4 100644
+index be3c5db..3e8b0e3 100644
 --- a/src/microsoft/vulkan/dzn_private.h
 +++ b/src/microsoft/vulkan/dzn_private.h
-@@ -1427,6 +1427,11 @@ struct dzn_instance {
+@@ -1428,6 +1428,11 @@ struct dzn_instance {
     uint32_t max_shader_model;
     uint32_t max_d3d12_options;
     const char *hide_exts;

@@ -2,7 +2,7 @@ dzn: Discard placed RT and DS images that leave UNDEFINED without enhanced barri
 
 Generated-by: LLM
 diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
-index 9523f34..9d1f306 100644
+index 2ff98e4..3496c55 100644
 --- a/src/microsoft/vulkan/dzn_cmd_buffer.c
 +++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
 @@ -146,6 +146,42 @@ dzn_cmd_buffer_queue_transition_barriers(struct dzn_cmd_buffer *cmdbuf,
@@ -93,10 +93,10 @@ index 9523f34..9d1f306 100644
              return ret;
  
 diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
-index 982adf8..5b14cff 100644
+index 0568e43..ca23cc5 100644
 --- a/src/microsoft/vulkan/dzn_image.c
 +++ b/src/microsoft/vulkan/dzn_image.c
-@@ -826,6 +826,7 @@ dzn_BindImageMemory2(VkDevice dev,
+@@ -853,6 +853,7 @@ dzn_BindImageMemory2(VkDevice dev,
           image->res = mem->dedicated_res;
           ID3D12Resource_AddRef(image->res);
        } else if (device->dev10 && image->castable_format_count > 0) {
@@ -104,7 +104,7 @@ index 982adf8..5b14cff 100644
           D3D12_RESOURCE_DESC1 desc = {
              .Dimension = image->desc.Dimension,
              .Alignment = image->desc.Alignment,
-@@ -849,6 +850,7 @@ dzn_BindImageMemory2(VkDevice dev,
+@@ -876,6 +877,7 @@ dzn_BindImageMemory2(VkDevice dev,
                                                       &IID_ID3D12Resource,
                                                       (void **)&image->res);
        } else {
@@ -113,12 +113,12 @@ index 982adf8..5b14cff 100644
           desc.Flags |= mem->res_flags;
           hres = ID3D12Device1_CreatePlacedResource(device->dev, mem->heap,
 diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
-index 01eb1c9..b7a9cfa 100644
+index ee1a37a..4d21ca2 100644
 --- a/src/microsoft/vulkan/dzn_private.h
 +++ b/src/microsoft/vulkan/dzn_private.h
-@@ -1245,6 +1245,7 @@ struct dzn_image {
-    } linear;
+@@ -1246,6 +1246,7 @@ struct dzn_image {
     D3D12_RESOURCE_DESC desc;
+    D3D12_RESOURCE_ALLOCATION_INFO allocation_info;
     ID3D12Resource *res;
 +   bool placed;
     uint32_t castable_format_count;

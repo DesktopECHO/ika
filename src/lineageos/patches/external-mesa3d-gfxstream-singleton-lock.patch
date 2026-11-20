@@ -6,7 +6,7 @@ pointer and allocated when it was null, with nothing keeping two threads from
 doing so at once, so an app starting Vulkan on several threads could end up
 with two trackers or two devices. Backport of Mesa main c2dcbcb9f13
 ("gfxstream/guest: create the process wide singletons under a lock", not in
-26.3.0); drop it when the Mesa pin includes it.
+26.3.1); drop it when the Mesa pin includes it.
 
 diff --git a/src/gfxstream/guest/platform/VirtGpu.cpp b/src/gfxstream/guest/platform/VirtGpu.cpp
 index 754215f9fd5..ef5eee0d999 100644

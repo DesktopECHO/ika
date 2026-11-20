@@ -1,5 +1,5 @@
 diff --git a/src/microsoft/compiler/dxil_nir.c b/src/microsoft/compiler/dxil_nir.c
-index d71ff9cdf8c..260499ef55a 100644
+index d71ff9c..260499e 100644
 --- a/src/microsoft/compiler/dxil_nir.c
 +++ b/src/microsoft/compiler/dxil_nir.c
 @@ -2570,6 +2570,18 @@ set_binding_variables_coherent(nir_shader *s, nir_binding binding, nir_variable_
@@ -50,7 +50,7 @@ index d71ff9cdf8c..260499ef55a 100644
           return false;
        }
 diff --git a/src/microsoft/compiler/nir_to_dxil.c b/src/microsoft/compiler/nir_to_dxil.c
-index 5aea30a6af2..beec40d405f 100644
+index d6d5eaf..02423e8 100644
 --- a/src/microsoft/compiler/nir_to_dxil.c
 +++ b/src/microsoft/compiler/nir_to_dxil.c
 @@ -495,27 +495,35 @@ emit_srv_metadata(struct dxil_module *m, const struct dxil_type *elem_type,
@@ -127,7 +127,7 @@ index 5aea30a6af2..beec40d405f 100644
        if (!unannotated_handle || !res_props)
           return false;
        handle = emit_annotate_handle(ctx, unannotated_handle, res_props);
-@@ -6104,8 +6111,6 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
+@@ -6105,8 +6112,6 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
           return false;
  
     } else if (ctx->opts->environment == DXIL_ENVIRONMENT_VULKAN) {
@@ -136,7 +136,7 @@ index 5aea30a6af2..beec40d405f 100644
        /* Handle read/write SSBOs as UAVs */
        nir_foreach_variable_with_modes(var, ctx->shader, nir_var_mem_ssbo) {
           if ((var->data.access & ACCESS_NON_WRITEABLE) == 0) {
-@@ -6114,9 +6119,7 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
+@@ -6115,9 +6120,7 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
                 count = glsl_get_length(var->type);
              if (!emit_uav(ctx, var->data.binding, var->data.descriptor_set,
                          count, DXIL_COMP_TYPE_INVALID, 1,
@@ -148,7 +148,7 @@ index 5aea30a6af2..beec40d405f 100644
              
           }
 diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
-index 84d8f10b49e..516353f5a13 100644
+index 665033a..9add5c1 100644
 --- a/src/microsoft/vulkan/dzn_cmd_buffer.c
 +++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
 @@ -315,6 +315,10 @@ dzn_cmd_buffer_image_barrier(struct dzn_cmd_buffer *cmdbuf,
@@ -653,90 +653,7 @@ index 84d8f10b49e..516353f5a13 100644
                                                          &triangle_fan);
           }
           ID3D12GraphicsCommandList1_IASetPrimitiveTopology(cmdbuf->cmdlist, topology);
-@@ -3360,8 +3659,13 @@ dzn_cmd_buffer_update_heaps(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint)
-          struct dzn_descriptor_heap *dst_heap = NULL;
-          uint32_t dst_heap_offset = 0;
- 
--         dzn_descriptor_heap_pool_alloc_slots(pool, device, desc_count,
--                                              &dst_heap, &dst_heap_offset);
-+         VkResult result =
-+            dzn_descriptor_heap_pool_alloc_slots(pool, device, desc_count,
-+                                                 &dst_heap, &dst_heap_offset);
-+         if (result != VK_SUCCESS) {
-+            vk_command_buffer_set_error(&cmdbuf->vk, result);
-+            return;
-+         }
-          new_heap_offsets[type] = dst_heap_offset;
-          update_root_desc_table[type] = true;
- 
-@@ -3828,7 +4132,7 @@ dzn_cmd_buffer_triangle_fan_rewrite_index(struct dzn_cmd_buffer *cmdbuf,
-    return VK_SUCCESS;
- }
- 
--static void
-+static bool
- dzn_cmd_buffer_prepare_draw(struct dzn_cmd_buffer *cmdbuf, bool indexed)
- {
-    if (indexed)
-@@ -3836,6 +4140,8 @@ dzn_cmd_buffer_prepare_draw(struct dzn_cmd_buffer *cmdbuf, bool indexed)
- 
-    dzn_cmd_buffer_update_pipeline(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS);
-    dzn_cmd_buffer_update_heaps(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS);
-+   if (cmdbuf->vk.record_result != VK_SUCCESS)
-+      return false;
-    dzn_cmd_buffer_update_sysvals(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS);
-    dzn_cmd_buffer_update_viewports(cmdbuf);
-    dzn_cmd_buffer_update_scissors(cmdbuf);
-@@ -3849,6 +4155,7 @@ dzn_cmd_buffer_prepare_draw(struct dzn_cmd_buffer *cmdbuf, bool indexed)
-    /* Reset the dirty states */
-    cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty &= DZN_CMD_BINDPOINT_DIRTY_HEAPS;
-    cmdbuf->state.dirty = 0;
-+   return true;
- }
- 
- static uint32_t
-@@ -4185,7 +4492,8 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
-       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |=
-          DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
- 
--      dzn_cmd_buffer_prepare_draw(cmdbuf, indexed);
-+      if (!dzn_cmd_buffer_prepare_draw(cmdbuf, indexed))
-+         return;
- 
-       ID3D12GraphicsCommandList1_ExecuteIndirect(cmdbuf->cmdlist, cmdsig,
-                                                  max_draw_count,
-@@ -4200,16 +4508,19 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
-    }
- }
- 
--static void
-+static bool
- dzn_cmd_buffer_prepare_dispatch(struct dzn_cmd_buffer *cmdbuf)
- {
-    dzn_cmd_buffer_update_pipeline(cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE);
-    dzn_cmd_buffer_update_heaps(cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE);
-+   if (cmdbuf->vk.record_result != VK_SUCCESS)
-+      return false;
-    dzn_cmd_buffer_update_sysvals(cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE);
-    dzn_cmd_buffer_update_push_constants(cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE);
- 
-    /* Reset the dirty states */
-    cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_COMPUTE].dirty &= DZN_CMD_BINDPOINT_DIRTY_HEAPS;
-+   return true;
- }
- 
- VKAPI_ATTR void VKAPI_CALL
-@@ -4593,7 +4904,8 @@ dzn_CmdDispatchBase(VkCommandBuffer commandBuffer,
-    cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_COMPUTE].dirty |=
-       DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
- 
--   dzn_cmd_buffer_prepare_dispatch(cmdbuf);
-+   if (!dzn_cmd_buffer_prepare_dispatch(cmdbuf))
-+      return;
-    ID3D12GraphicsCommandList1_Dispatch(cmdbuf->cmdlist, groupCountX, groupCountY, groupCountZ);
- }
- 
-@@ -4977,8 +5289,8 @@ dzn_rendering_attachment_initial_transition(struct dzn_cmd_buffer *cmdbuf,
+@@ -4995,8 +5294,8 @@ dzn_rendering_attachment_initial_transition(struct dzn_cmd_buffer *cmdbuf,
        D3D12_BARRIER_LAYOUT layout_before = dzn_vk_layout_to_d3d_layout(initial_layout->initialLayout, cmdbuf->type, aspect);
        D3D12_BARRIER_LAYOUT layout_after = dzn_vk_layout_to_d3d_layout(att->imageLayout, cmdbuf->type, aspect);
        if (image->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS) {
@@ -747,7 +664,7 @@ index 84d8f10b49e..516353f5a13 100644
        }
  
        dzn_cmd_buffer_image_barrier(cmdbuf, image,
-@@ -4995,11 +5307,125 @@ dzn_rendering_attachment_initial_transition(struct dzn_cmd_buffer *cmdbuf,
+@@ -5013,11 +5312,125 @@ dzn_rendering_attachment_initial_transition(struct dzn_cmd_buffer *cmdbuf,
     }
  }
  
@@ -873,7 +790,7 @@ index 84d8f10b49e..516353f5a13 100644
  
     D3D12_RECT new_render_area = {
        .left = pRenderingInfo->renderArea.offset.x,
-@@ -5044,6 +5470,8 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
+@@ -5062,6 +5475,8 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
        rt_handles[i] = dzn_cmd_buffer_get_rtv(cmdbuf, img, &iview->rtv_desc);
        dzn_rendering_attachment_initial_transition(cmdbuf, att,
                                                    VK_IMAGE_ASPECT_COLOR_BIT);
@@ -882,7 +799,7 @@ index 84d8f10b49e..516353f5a13 100644
     }
  
     if (pRenderingInfo->pDepthAttachment) {
-@@ -5060,6 +5488,8 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
+@@ -5078,6 +5493,8 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
        cmdbuf->state.render.attachments.depth.store_op = att->storeOp;
        dzn_rendering_attachment_initial_transition(cmdbuf, att,
                                                    VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -891,7 +808,7 @@ index 84d8f10b49e..516353f5a13 100644
     }
  
     if (pRenderingInfo->pStencilAttachment) {
-@@ -5076,6 +5506,8 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
+@@ -5094,6 +5511,8 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
        cmdbuf->state.render.attachments.stencil.store_op = att->storeOp;
        dzn_rendering_attachment_initial_transition(cmdbuf, att,
                                                    VK_IMAGE_ASPECT_STENCIL_BIT);
@@ -900,7 +817,7 @@ index 84d8f10b49e..516353f5a13 100644
     }
  
     if (pRenderingInfo->pDepthAttachment || pRenderingInfo->pStencilAttachment) {
-@@ -5110,13 +5542,15 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
+@@ -5128,13 +5547,15 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
            !(pRenderingInfo->flags & VK_RENDERING_RESUMING_BIT)) {
           if (pRenderingInfo->viewMask != 0) {
              u_foreach_bit(layer, pRenderingInfo->viewMask) {
@@ -918,7 +835,7 @@ index 84d8f10b49e..516353f5a13 100644
                                              &att->clearValue,
                                              VK_IMAGE_ASPECT_COLOR_BIT, 0,
                                              pRenderingInfo->layerCount, 1,
-@@ -5142,23 +5576,24 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
+@@ -5160,23 +5581,24 @@ dzn_CmdBeginRendering(VkCommandBuffer commandBuffer,
        if (z_iview && z_att->loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR) {
           aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
           clear_val.depthStencil.depth = z_att->clearValue.depthStencil.depth;
@@ -948,7 +865,7 @@ index 84d8f10b49e..516353f5a13 100644
        }
  
        for (uint32_t i = 0; i < ARRAY_SIZE(clear_aspects) && clear_aspects[i]; i++) {
-@@ -5204,6 +5639,15 @@ dzn_CmdEndRendering(VkCommandBuffer commandBuffer)
+@@ -5222,6 +5644,15 @@ dzn_CmdEndRendering(VkCommandBuffer commandBuffer)
                                                    &cmdbuf->state.render.attachments.stencil,
                                                    VK_IMAGE_ASPECT_STENCIL_BIT,
                                                    separate_stencil_resolve);
@@ -964,47 +881,7 @@ index 84d8f10b49e..516353f5a13 100644
     }
  
     memset(&cmdbuf->state.render, 0, sizeof(cmdbuf->state.render));
-@@ -5429,7 +5873,8 @@ dzn_CmdDraw(VkCommandBuffer commandBuffer,
-          cmdbuf->state.sysvals.gfx.view_index = view;
-          cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |=
-             DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
--         dzn_cmd_buffer_prepare_draw(cmdbuf, true);
-+         if (!dzn_cmd_buffer_prepare_draw(cmdbuf, true))
-+            return;
-          ID3D12GraphicsCommandList1_DrawIndexedInstanced(cmdbuf->cmdlist, vertexCount, instanceCount, 0,
-                                                 firstVertex, firstInstance);
-       }
-@@ -5445,7 +5890,8 @@ dzn_CmdDraw(VkCommandBuffer commandBuffer,
-          cmdbuf->state.sysvals.gfx.view_index = view;
-          cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |=
-             DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
--         dzn_cmd_buffer_prepare_draw(cmdbuf, false);
-+         if (!dzn_cmd_buffer_prepare_draw(cmdbuf, false))
-+            return;
-          ID3D12GraphicsCommandList1_DrawInstanced(cmdbuf->cmdlist, vertexCount, instanceCount,
-                                           firstVertex, firstInstance);
-       }
-@@ -5523,7 +5969,8 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
-       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |=
-          DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
- 
--      dzn_cmd_buffer_prepare_draw(cmdbuf, true);
-+      if (!dzn_cmd_buffer_prepare_draw(cmdbuf, true))
-+         return;
-       ID3D12GraphicsCommandList1_DrawIndexedInstanced(cmdbuf->cmdlist, indexCount, instanceCount, firstIndex,
-                                             vertexOffset, firstInstance);
-    }
-@@ -6010,7 +6457,8 @@ dzn_CmdDispatchIndirect(VkCommandBuffer commandBuffer,
-    cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_COMPUTE].dirty |=
-       DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
- 
--   dzn_cmd_buffer_prepare_dispatch(cmdbuf);
-+   if (!dzn_cmd_buffer_prepare_dispatch(cmdbuf))
-+      return;
- 
-    struct dzn_compute_pipeline *pipeline = (struct dzn_compute_pipeline *)
-       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_COMPUTE].pipeline;
-@@ -6196,6 +6644,7 @@ dzn_CmdSetPrimitiveTopology(VkCommandBuffer commandBuffer,
+@@ -6222,6 +6653,7 @@ dzn_CmdSetPrimitiveTopology(VkCommandBuffer commandBuffer,
     VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
  
     cmdbuf->state.dyn.topology = primitiveTopology;
@@ -1013,7 +890,7 @@ index 84d8f10b49e..516353f5a13 100644
  }
  
 diff --git a/src/microsoft/vulkan/dzn_descriptor_set.c b/src/microsoft/vulkan/dzn_descriptor_set.c
-index 8ce21a5e480..a75b72cc387 100644
+index faa8724..5efb6d4 100644
 --- a/src/microsoft/vulkan/dzn_descriptor_set.c
 +++ b/src/microsoft/vulkan/dzn_descriptor_set.c
 @@ -963,9 +963,13 @@ dzn_descriptor_heap_init(struct dzn_descriptor_heap *heap,
@@ -1045,7 +922,7 @@ index 8ce21a5e480..a75b72cc387 100644
  
     if (!device->bindless)
 diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
-index daecd5bba04..9bb25b14872 100644
+index d238d37..63af772 100644
 --- a/src/microsoft/vulkan/dzn_device.c
 +++ b/src/microsoft/vulkan/dzn_device.c
 @@ -149,6 +149,7 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
@@ -1075,7 +952,7 @@ index daecd5bba04..9bb25b14872 100644
     { NULL, 0 }
  };
  
-@@ -477,6 +483,8 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
+@@ -484,6 +490,8 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
     dzn_physical_device_get_options(pdev, 3, D3D12_FEATURE_D3D12_OPTIONS3, &pdev->options3, sizeof(pdev->options3));
     dzn_physical_device_get_options(pdev, 4, D3D12_FEATURE_D3D12_OPTIONS4, &pdev->options4, sizeof(pdev->options4));
     dzn_physical_device_get_options(pdev, 12, D3D12_FEATURE_D3D12_OPTIONS12, &pdev->options12, sizeof(pdev->options12));
@@ -1084,25 +961,7 @@ index daecd5bba04..9bb25b14872 100644
     dzn_physical_device_get_options(pdev, 13, D3D12_FEATURE_D3D12_OPTIONS13, &pdev->options13, sizeof(pdev->options13));
     dzn_physical_device_get_options(pdev, 14, D3D12_FEATURE_D3D12_OPTIONS14, &pdev->options14, sizeof(pdev->options14));
     dzn_physical_device_get_options(pdev, 15, D3D12_FEATURE_D3D12_OPTIONS15, &pdev->options15, sizeof(pdev->options15));
-@@ -505,7 +513,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
-                        VK_QUEUE_TRANSFER_BIT,
-          .queueCount = 4,
-          .timestampValidBits = 64,
--         .minImageTransferGranularity = { 0, 0, 0 },
-+         .minImageTransferGranularity = { 1, 1, 1 },
-       },
-       .desc = {
-          .Type = D3D12_COMMAND_LIST_TYPE_DIRECT,
-@@ -518,7 +526,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
-                        VK_QUEUE_TRANSFER_BIT,
-          .queueCount = 8,
-          .timestampValidBits = 64,
--         .minImageTransferGranularity = { 0, 0, 0 },
-+         .minImageTransferGranularity = { 1, 1, 1 },
-       },
-       .desc = {
-          .Type = D3D12_COMMAND_LIST_TYPE_COMPUTE,
-@@ -696,10 +704,9 @@ dzn_physical_device_get_max_array_layers()
+@@ -708,10 +716,9 @@ dzn_physical_device_get_max_array_layers()
  static bool
  dzn_physical_device_supports_8bit(const struct dzn_physical_device *pdev)
  {
@@ -1116,7 +975,7 @@ index daecd5bba04..9bb25b14872 100644
  }
  
  static void
-@@ -849,6 +856,9 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+@@ -861,6 +868,9 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
        .maintenance4                       = true,
        .shaderExpectAssume                 = true,
  
@@ -1126,7 +985,7 @@ index daecd5bba04..9bb25b14872 100644
        .vertexAttributeInstanceRateDivisor = true,
        .vertexAttributeInstanceRateZeroDivisor = true,
        .shaderReplicatedComposites         = true,
-@@ -863,7 +873,11 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+@@ -875,7 +885,11 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
  static uint32_t
  dzn_physical_device_get_api_version(const struct dzn_physical_device *pdev)
  {
@@ -1139,7 +998,7 @@ index daecd5bba04..9bb25b14872 100644
        return DZN_API_VERSION;
  
     return VK_MAKE_VERSION(1, 2, VK_HEADER_VERSION);
-@@ -1253,6 +1267,19 @@ dzn_physical_device_create(struct vk_instance *instance,
+@@ -1264,6 +1278,19 @@ dzn_physical_device_create(struct vk_instance *instance,
        pdev->vk.supported_extensions.KHR_8bit_storage = true;
     if (dzn_instance->debug_flags & DZN_DEBUG_NO_BINDLESS)
        pdev->vk.supported_extensions.EXT_descriptor_indexing = false;
@@ -1159,7 +1018,7 @@ index daecd5bba04..9bb25b14872 100644
     dzn_physical_device_get_features(pdev, &pdev->vk.supported_features);
     dzn_physical_device_get_properties(pdev, &pdev->vk.properties);
  
-@@ -1454,7 +1481,8 @@ dzn_physical_device_get_format_properties(struct dzn_physical_device *pdev,
+@@ -1469,7 +1496,8 @@ dzn_physical_device_get_format_properties(struct dzn_physical_device *pdev,
      * which still isn't quite right (it'd be Vulkan R4G4B4A4), but can be
      * swizzled by just swapping R and B, so no border color issues arise.
      */
@@ -1169,7 +1028,7 @@ index daecd5bba04..9bb25b14872 100644
        VkFormatFeatureFlags bgra4_req_features =
           VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
           VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
-@@ -1583,7 +1611,8 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
+@@ -1598,7 +1626,8 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
     if (dfmt_info.Format == DXGI_FORMAT_UNKNOWN)
        return VK_ERROR_FORMAT_NOT_SUPPORTED;
  
@@ -1179,7 +1038,7 @@ index daecd5bba04..9bb25b14872 100644
        !(info->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT);
  
     if ((info->type == VK_IMAGE_TYPE_1D && !(dfmt_info.Support1 & D3D12_FORMAT_SUPPORT1_TEXTURE1D)) ||
-@@ -1936,6 +1965,7 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
+@@ -1973,6 +2002,7 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
        (sm_major << 4) | sm_minor : UINT32_MAX;
     instance->max_d3d12_options =
        debug_get_num_option("DZN_MAX_D3D12_OPTIONS", UINT32_MAX);
@@ -1187,7 +1046,7 @@ index daecd5bba04..9bb25b14872 100644
  
  #ifdef _WIN32
     if (instance->debug_flags & DZN_DEBUG_DEBUGGER) {
-@@ -2173,6 +2203,11 @@ dzn_queue_submit(struct vk_queue *q,
+@@ -2208,6 +2238,11 @@ dzn_queue_submit(struct vk_queue *q,
  
        cmdlists[i] = (ID3D12CommandList *)cmd_buffer->cmdlist;
  
@@ -1200,10 +1059,10 @@ index daecd5bba04..9bb25b14872 100644
           mtx_lock(&range->qpool->queries_lock);
           for (uint32_t q = range->start; q < range->start + range->count; q++) {
 diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
-index a846881c97f..0cdf9dcb245 100644
+index 58a3a2c..d8bfb8a 100644
 --- a/src/microsoft/vulkan/dzn_image.c
 +++ b/src/microsoft/vulkan/dzn_image.c
-@@ -1037,8 +1037,10 @@ dzn_image_view_prepare_srv_desc(struct dzn_image_view *iview)
+@@ -1051,8 +1051,10 @@ dzn_image_view_prepare_srv_desc(struct dzn_image_view *iview)
     };
  
     /* Swap components to fake B4G4R4A4 support. */
@@ -1217,7 +1076,7 @@ index a846881c97f..0cdf9dcb245 100644
              D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_2,
              D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1,
 diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
-index 8a209744e2d..9788dc1352b 100644
+index 8a20974..9788dc1 100644
 --- a/src/microsoft/vulkan/dzn_pipeline.c
 +++ b/src/microsoft/vulkan/dzn_pipeline.c
 @@ -196,12 +196,25 @@ dzn_graphics_pipeline_static_rast_discard(const struct dzn_graphics_pipeline *pi
@@ -1538,7 +1397,7 @@ index 8a209744e2d..9788dc1352b 100644
        _mesa_blake3_final(&nir_hash_ctx, nir_hash);
     }
 diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
-index bb54e7bf293..576445baf63 100644
+index 8b9e93f..8846fa5 100644
 --- a/src/microsoft/vulkan/dzn_private.h
 +++ b/src/microsoft/vulkan/dzn_private.h
 @@ -412,6 +412,12 @@ enum dzn_dynamic_state {
@@ -1609,7 +1468,7 @@ index bb54e7bf293..576445baf63 100644
  struct dzn_compute_pipeline {
     struct dzn_pipeline base;
     struct {
-@@ -1358,6 +1382,10 @@ enum dzn_debug_flags {
+@@ -1359,6 +1383,10 @@ enum dzn_debug_flags {
     DZN_DEBUG_MULTIVIEW = 1 << 13,
     DZN_DEBUG_NO_16BIT = 1 << 14,
     DZN_DEBUG_NO_STENCIL_REF = 1 << 15,
@@ -1620,7 +1479,7 @@ index bb54e7bf293..576445baf63 100644
  };
  
  struct dzn_instance {
-@@ -1372,6 +1400,7 @@ struct dzn_instance {
+@@ -1373,6 +1401,7 @@ struct dzn_instance {
     uint32_t debug_flags;
     uint32_t max_shader_model;
     uint32_t max_d3d12_options;
@@ -1629,7 +1488,7 @@ index bb54e7bf293..576445baf63 100644
     struct vk_sync_binary_type sync_binary_type;
  
 diff --git a/src/microsoft/vulkan/dzn_util.c b/src/microsoft/vulkan/dzn_util.c
-index 0c4a39bda40..d7799ce1f81 100644
+index 3c67ec6..616faa5 100644
 --- a/src/microsoft/vulkan/dzn_util.c
 +++ b/src/microsoft/vulkan/dzn_util.c
 @@ -68,6 +68,7 @@ static const DXGI_FORMAT formats[PIPE_FORMAT_COUNT] = {

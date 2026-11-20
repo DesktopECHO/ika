@@ -162,7 +162,7 @@ available for testing the native gfxstream GLES translator, while
 from the equation.
 
 The production guest Vulkan stack pins Mesa to the release in
-`src/tools/mesa/release.env` (26.3.0, `0a6fa60abb73`), the one the host's
+`src/tools/mesa/release.env` (26.3.1, `fec8830e9c94`), the one the host's
 Lavapipe, Dozen and D3D12 OpenGL drivers are built from, with Ika's patches in
 `patches/series` on top. Verify it together with the pinned ANGLE,
 guest SwiftShader, drm_hwcomposer, gfxstream, rutabaga_gfx, crosvm, minigbm,
