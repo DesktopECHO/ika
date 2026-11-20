@@ -1,0 +1,60 @@
+dzn: Offer dual-source blending
+
+Dozen kept dualSrcBlend off, although Direct3D 12 supports dual-source
+blending with one render target on every feature level, DXIL's signature
+already gives a fragment shader's location 0 output of index 1 as
+SV_Target1, and Dozen already translates the SRC1 blend factors. Under Venus
+an Android app sees Dozen's features almost as they are, and an app that
+needs the feature had to do without it or refused to run.
+
+MIN and MAX ignore the blend factors, but Direct3D 12 still checks them and
+fails the pipeline with E_INVALIDARG when one is SRC1, so those operations
+get ONE factors.
+
+Based on Oliver Bestmann's commits e0e6d1c and d0cdb2e in
+github.com/weaselway/mesa (MIT), where dEQP-VK.pipeline.monolithic.blend.
+dual_source.* passes.
+
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 45bb4ee..2af9b67 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -766,7 +766,7 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
+       .geometryShader = true,
+       .tessellationShader = false,
+       .sampleRateShading = true,
+-      .dualSrcBlend = false,
++      .dualSrcBlend = true,
+       .logicOp = false,
+       .multiDrawIndirect = true,
+       .drawIndirectFirstInstance = true,
+@@ -1009,7 +1009,7 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
+       .maxGeometryTotalOutputComponents = D3D12_REQ_GS_INVOCATION_32BIT_OUTPUT_COMPONENT_LIMIT,
+       .maxFragmentInputComponents = D3D12_PS_INPUT_REGISTER_COUNT * D3D12_PS_INPUT_REGISTER_COMPONENTS,
+       .maxFragmentOutputAttachments = D3D12_PS_OUTPUT_REGISTER_COUNT,
+-      .maxFragmentDualSrcAttachments = 0,
++      .maxFragmentDualSrcAttachments = 1,
+       .maxFragmentCombinedOutputResources = D3D12_PS_OUTPUT_REGISTER_COUNT,
+       .maxComputeSharedMemorySize = D3D12_CS_TGSM_REGISTER_COUNT * sizeof(float),
+       .maxComputeWorkGroupCount = { D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION,
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index 1cf6988..05be73a 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -2188,6 +2188,16 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+          desc->RenderTarget[i].BlendOpAlpha =
+             translate_blend_op(in_blend->pAttachments[i].alphaBlendOp);
+ 
++         /* MIN and MAX ignore the blend factors, but Direct3D 12 still
++          * checks them, and refuses a dual-source (SRC1) factor there.
++          */
++         if (desc->RenderTarget[i].BlendOp == D3D12_BLEND_OP_MIN ||
++             desc->RenderTarget[i].BlendOp == D3D12_BLEND_OP_MAX)
++            desc->RenderTarget[i].SrcBlend = desc->RenderTarget[i].DestBlend = D3D12_BLEND_ONE;
++         if (desc->RenderTarget[i].BlendOpAlpha == D3D12_BLEND_OP_MIN ||
++             desc->RenderTarget[i].BlendOpAlpha == D3D12_BLEND_OP_MAX)
++            desc->RenderTarget[i].SrcBlendAlpha = desc->RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ONE;
++
+          const VkPipelineColorBlendAttachmentState *att = &in_blend->pAttachments[i];
+          if (att->blendEnable) {
+             constant_alpha |= is_constant_alpha_blend_factor(att->srcColorBlendFactor) ||

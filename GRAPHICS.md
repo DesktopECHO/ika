@@ -549,6 +549,13 @@ compressed data, and Destiny Rising's sky was black on a Radeon 780M. Such
 textures are never compressed, which costs some memory bandwidth when the
 game renders to them.
 
+Ika's Dozen offers dual-source blending (`dualSrcBlend`), which Direct3D 12
+supports with one render target and Dozen kept off
+([dzn-dual-src-blend.patch](src/tools/mesa/dzn-dual-src-blend.patch)). A
+blend with the `MIN` or `MAX` operation gets `ONE` factors, which these
+operations ignore: Direct3D 12 refuses such a pipeline when a factor names
+the shader's second output.
+
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window
