@@ -1,0 +1,76 @@
+dzn: Resolve into a slice of a 3D image, and blit stencil to every layer
+
+A render pass resolve into a 2D view of a 3D image used ResolveSubresource,
+which cannot write one slice of a 3D image, and wrote slice 0; on NVIDIA
+vkEndCommandBuffer then failed. Such resolves take the blit path, and
+vkCmdResolveImage now honours dstOffset.z.
+
+Without static samplers, the blit and resolve loops moved the stencil
+mask's root parameter on by one for each layer, so from the second layer
+on the stencil fallback wrote nothing.
+
+From Oliver Bestmann's commits 02ce0c3 and 16fb00a in
+github.com/weaselway/mesa (MIT), where dEQP-VK.renderpasses.*.resolve_into_3d_image.*
+and renderpasses.renderpass2.depth_stencil_resolve.image_2d_16_64_6.* pass.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 93213d8..fc2d3bc 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -3795,7 +3795,7 @@ dzn_cmd_buffer_blit_region(struct dzn_cmd_buffer *cmdbuf,
+    const struct dzn_physical_device *pdev = container_of(device->vk.physical, struct dzn_physical_device, vk);
+    bool support_stencil_blit = pdev->options.PSSpecifiedStencilRefSupported;
+    uint32_t stencil_bit = support_stencil_blit ? 0xf : 0;
+-   uint32_t stencil_bit_root_param_slot = 2;
++   uint32_t stencil_bit_root_param_slot = device->support_static_samplers ? 2 : 3;
+    assert(device->support_static_samplers == (sampler_heap == NULL));
+ 
+    dzn_foreach_aspect(aspect, region->srcSubresource.aspectMask) {
+@@ -3851,7 +3851,6 @@ dzn_cmd_buffer_blit_region(struct dzn_cmd_buffer *cmdbuf,
+          ID3D12GraphicsCommandList1_SetGraphicsRoot32BitConstants(cmdbuf->cmdlist, 1, 1, &src_z_coord, 16);
+          if (!device->support_static_samplers) {
+             ID3D12GraphicsCommandList1_SetGraphicsRootDescriptorTable(cmdbuf->cmdlist, 2, dzn_descriptor_heap_get_gpu_handle(sampler_heap, sampler_heap_slot));
+-            stencil_bit_root_param_slot++;
+          }
+          if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT && !support_stencil_blit) {
+             cmdbuf->state.dirty |= DZN_CMD_DIRTY_STENCIL_REF;
+@@ -3908,7 +3907,7 @@ dzn_cmd_buffer_resolve_region(struct dzn_cmd_buffer *cmdbuf,
+    const struct dzn_physical_device *pdev = container_of(device->vk.physical, struct dzn_physical_device, vk);
+    bool support_stencil_blit = pdev->options.PSSpecifiedStencilRefSupported;
+    uint32_t stencil_bit = support_stencil_blit ? 0xf : 0;
+-   uint32_t stencil_bit_root_param_slot = 2;
++   uint32_t stencil_bit_root_param_slot = device->support_static_samplers ? 2 : 3;
+    assert(device->support_static_samplers == (sampler_heap == NULL));
+    enum dzn_blit_resolve_mode resolve_mode = get_blit_resolve_mode(mode);
+ 
+@@ -3954,14 +3953,14 @@ dzn_cmd_buffer_resolve_region(struct dzn_cmd_buffer *cmdbuf,
+       for (uint32_t layer = 0; layer < layer_count; layer++) {
+          float src_z_coord = layer;
+ 
++         /* dstOffset.z selects the slice of a 3D destination, it is 0 otherwise */
+          dzn_cmd_buffer_blit_prepare_dst_view(cmdbuf,
+                                               dst, dst_format, aspect, region->dstSubresource.mipLevel,
+-                                              region->dstSubresource.baseArrayLayer + layer,
++                                              region->dstSubresource.baseArrayLayer + region->dstOffset.z + layer,
+                                               dst_offset);
+          ID3D12GraphicsCommandList1_SetGraphicsRoot32BitConstants(cmdbuf->cmdlist, 1, 1, &src_z_coord, 16);
+          if (!device->support_static_samplers) {
+             ID3D12GraphicsCommandList1_SetGraphicsRootDescriptorTable(cmdbuf->cmdlist, 2, dzn_descriptor_heap_get_gpu_handle(sampler_heap, sampler_heap_slot));
+-            stencil_bit_root_param_slot++;
+          }
+          if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT && !support_stencil_blit) {
+             cmdbuf->state.dirty |= DZN_CMD_DIRTY_STENCIL_REF;
+@@ -5708,8 +5707,11 @@ dzn_cmd_buffer_resolve_rendering_attachment(struct dzn_cmd_buffer *cmdbuf,
+       .layerCount = MIN2(src->vk.layer_count, dst->vk.layer_count),
+    };
+    if (dst_img->desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D) {
+-      dst_range.baseArrayLayer = 0;
+-      dst_range.layerCount = 1;
++      /* ResolveSubresource can't write a single slice of a 3D image, blit
++       * to the slice the view selects.
++       */
++      dzn_cmd_buffer_resolve_rendering_attachment_via_blit(cmdbuf, att, aspect, &src_range, &dst_range);
++      return;
+    }
+ 
+    if (force_blit_resolve ||

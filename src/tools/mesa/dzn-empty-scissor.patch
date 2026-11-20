@@ -1,0 +1,26 @@
+dzn: Never give Direct3D 12 an all-zero scissor rectangle
+
+NVIDIA's Direct3D 12 driver clips nothing with a {0, 0, 0, 0} scissor
+rectangle, so a draw with an empty Vulkan scissor, or one the render area
+emptied, covered the whole viewport. Other empty rectangles work, so an
+empty scissor becomes {1, 1, 1, 1}.
+
+From Oliver Bestmann's commit 4d13e30 in github.com/weaselway/mesa (MIT),
+where dEQP-VK.draw.*.scissor.empty_dynamic_scissor_first_draw passes on
+NVIDIA (it failed before).
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 99fbb22..743483d 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -4149,6 +4149,10 @@ dzn_cmd_buffer_update_scissors(struct dzn_cmd_buffer *cmdbuf)
+       scissors[i].top = MAX2(scissors[i].top, cmdbuf->state.render.area.top);
+       scissors[i].right = MIN2(scissors[i].right, cmdbuf->state.render.area.right);
+       scissors[i].bottom = MIN2(scissors[i].bottom, cmdbuf->state.render.area.bottom);
++
++      /* NVIDIA doesn't scissor anything with an all-zero rect, use another empty one. */
++      if (scissors[i].right <= scissors[i].left || scissors[i].bottom <= scissors[i].top)
++         scissors[i] = (D3D12_RECT){ 1, 1, 1, 1 };
+    }
+ 
+    ID3D12GraphicsCommandList1_RSSetScissorRects(cmdbuf->cmdlist, count, scissors);

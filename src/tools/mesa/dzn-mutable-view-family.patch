@@ -1,0 +1,247 @@
+dzn: Keep views of mutable images within their format family without relaxed casting
+
+Without relaxed format casting, Dozen creates a mutable-format image as a
+typeless resource, and Direct3D 12 takes only views of that format family.
+Vulkan allows any view format of the same texel size: an R8G8B8A8 image seen
+as R32_UINT, R16G16_SFLOAT or B8G8R8A8, say. Such a view was an invalid
+call, and Intel's Direct3D 12 driver under WSL2 (a UHD 770) removed the
+device for it, at CreateShaderResourceView, taking down every app sharing
+the device: 980 of the dEQP-VK.image.mutable cases did that there.
+
+On such GPUs a view of another family now gets the image's own format, as
+do the clears and render pass resolves Dozen makes through such views (an
+integer stand-in is resolved from sample 0, as integers cannot be
+averaged): the texels are read or written with the wrong type, and the
+device stays. A warning says so once.
+
+A clear through such a view writes the bits the view's format gives the
+colour, and a clear Direct3D 12 cannot take as floats is not turned into a
+copy into a multisampled texture, which is invalid.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index d8cfaa9..7b9d884 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -2739,13 +2739,24 @@ dzn_cmd_buffer_clear_attachment(struct dzn_cmd_buffer *cmdbuf,
+          }
+       }
+    } else if (aspects & VK_IMAGE_ASPECT_COLOR_BIT) {
+-      VkClearColorValue color = adjust_clear_color(pdev, view->vk.format, &value->color);
++      /* Of another format family only with relaxed format casting */
++      VkFormat view_format = dzn_image_view_d3d12_format(view);
++      VkClearColorValue clear_color = value->color;
++      if (view_format != view->vk.format) {
++         /* The bits the view's format gives the colour, in the stand-in's */
++         uint8_t bits[16] = { 0 };
++         util_format_pack_rgba(vk_format_to_pipe_format(view->vk.format), bits,
++                               value->color.uint32, 1);
++         util_format_unpack_rgba(vk_format_to_pipe_format(view_format),
++                                 clear_color.uint32, bits, 1);
++      }
++      VkClearColorValue color = adjust_clear_color(pdev, view_format, &clear_color);
+       bool clear_with_cpy = false;
+       float vals[4];
+       /* Channels the format lacks may hold values a float can't represent */
+-      uint32_t comps = vk_format_get_nr_components(view->vk.format);
++      uint32_t comps = vk_format_get_nr_components(view_format);
+ 
+-      if (vk_format_is_sint(view->vk.format)) {
++      if (vk_format_is_sint(view_format)) {
+          for (uint32_t i = 0; i < 4; i++) {
+             vals[i] = color.int32[i];
+             if (i < comps && color.int32[i] != (int32_t)vals[i]) {
+@@ -2753,7 +2764,7 @@ dzn_cmd_buffer_clear_attachment(struct dzn_cmd_buffer *cmdbuf,
+                break;
+             }
+          }
+-      } else if (vk_format_is_uint(view->vk.format)) {
++      } else if (vk_format_is_uint(view_format)) {
+          for (uint32_t i = 0; i < 4; i++) {
+             vals[i] = color.uint32[i];
+             if (i < comps && color.uint32[i] != (uint32_t)vals[i]) {
+@@ -2766,10 +2777,16 @@ dzn_cmd_buffer_clear_attachment(struct dzn_cmd_buffer *cmdbuf,
+             vals[i] = color.float32[i];
+       }
+ 
++      /* A copy into a multisampled texture is invalid: clear with the
++       * nearest floats instead.
++       */
++      if (image->vk.samples > 1)
++         clear_with_cpy = false;
++
+       if (clear_with_cpy) {
+-         dzn_cmd_buffer_clear_rects_with_copy(cmdbuf, image, view->vk.format,
++         dzn_cmd_buffer_clear_rects_with_copy(cmdbuf, image, view_format,
+                                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+-                                              &value->color,
++                                              &clear_color,
+                                               &range, rect_count, rects);
+       } else {
+          if (cmdbuf->enhanced_barriers) {
+@@ -2784,7 +2801,7 @@ dzn_cmd_buffer_clear_attachment(struct dzn_cmd_buffer *cmdbuf,
+          }
+ 
+          D3D12_RENDER_TARGET_VIEW_DESC desc = dzn_image_get_rtv_desc(image, &range, 0);
+-         desc.Format = dzn_image_get_dxgi_format(pdev, view->vk.format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
++         desc.Format = dzn_image_get_dxgi_format(pdev, view_format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                                  VK_IMAGE_ASPECT_COLOR_BIT);
+          D3D12_CPU_DESCRIPTOR_HANDLE handle = dzn_cmd_buffer_get_rtv(cmdbuf, image, &desc);
+          ID3D12GraphicsCommandList1_ClearRenderTargetView(cmdbuf->cmdlist, handle, vals, rect_count, rects);
+@@ -3914,6 +3931,11 @@ dzn_cmd_buffer_resolve_region(struct dzn_cmd_buffer *cmdbuf,
+    uint32_t stencil_bit_root_param_slot = device->support_static_samplers ? 2 : 3;
+    assert(device->support_static_samplers == (sampler_heap == NULL));
+    enum dzn_blit_resolve_mode resolve_mode = get_blit_resolve_mode(mode);
++   /* An integer format here stands in for a float view of another format
++    * family (dzn_image_view_d3d12_format), and integers can't be averaged.
++    */
++   if (resolve_mode == dzn_blit_resolve_average && vk_format_is_int(src_format))
++      resolve_mode = dzn_blit_resolve_sample_zero;
+ 
+    dzn_foreach_aspect(aspect, region->srcSubresource.aspectMask) {
+       D3D12_BARRIER_LAYOUT restore_src_layout = D3D12_BARRIER_LAYOUT_COMMON;
+@@ -5660,7 +5682,8 @@ dzn_cmd_buffer_resolve_rendering_attachment_via_blit(struct dzn_cmd_buffer *cmdb
+          u_minify(att->iview->vk.image->extent.depth, region.srcSubresource.mipLevel),
+       };
+       dzn_cmd_buffer_resolve_region(cmdbuf, &resolve_info,
+-                                    att->iview->vk.format, att->resolve.iview->vk.format,
++                                    dzn_image_view_d3d12_format(att->iview),
++                                    dzn_image_view_d3d12_format(att->resolve.iview),
+                                     att->resolve.mode, heap, &heap_slot, sampler_heap, sampler_heap_slot, 0);
+    }
+ 
+diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
+index a16e0a8..06e178b 100644
+--- a/src/microsoft/vulkan/dzn_image.c
++++ b/src/microsoft/vulkan/dzn_image.c
+@@ -1449,6 +1449,108 @@ dzn_image_view_finish(struct dzn_image_view *iview)
+    vk_image_view_finish(&iview->vk);
+ }
+ 
++/* Without relaxed format casting, a mutable-format image is a typeless
++ * resource, and Direct3D 12 takes only views of that format family: a view
++ * of another family (an R8G8B8A8 image seen as R32_UINT, say), which Vulkan
++ * allows for formats of the same texel size, is an invalid call, and some
++ * drivers (Intel's under WSL2) remove the device for it, taking down every
++ * other user of the device. Such a view gets the image's own format instead:
++ * the texels are read with the wrong type, but the device stays.
++ */
++static DXGI_FORMAT
++dzn_image_view_castable_format(const struct dzn_physical_device *pdev,
++                               const struct dzn_image *image,
++                               DXGI_FORMAT view_format,
++                               VkImageUsageFlags usage,
++                               VkImageAspectFlags aspects)
++{
++   DXGI_FORMAT family = image->desc.Format;
++   if (view_format == DXGI_FORMAT_UNKNOWN ||
++       dzn_get_typeless_dxgi_format(view_format) == family)
++      return view_format;
++
++   DXGI_FORMAT own = dzn_image_get_dxgi_format(pdev, image->vk.format, usage, aspects);
++   if (dzn_get_typeless_dxgi_format(own) != family)
++      return view_format;
++
++   static bool warned;
++   if (!warned) {
++      warned = true;
++      mesa_logw("dzn: this GPU's Direct3D 12 driver has no relaxed format casting; "
++                "a view in DXGI format %d of an image of format family %d uses format %d",
++                view_format, family, own);
++   }
++   return own;
++}
++
++/* The format Dozen can use for a view of an image in Direct3D 12: the
++ * view's, or the image's own when the view's is of another format family
++ * than a typeless mutable-format resource without relaxed format casting
++ * (see dzn_image_view_castable_format).
++ */
++VkFormat
++dzn_image_view_d3d12_format(const struct dzn_image_view *iview)
++{
++   const struct dzn_image *image =
++      container_of(iview->vk.image, struct dzn_image, vk);
++   const struct dzn_physical_device *pdev =
++      container_of(iview->vk.base.device->physical, struct dzn_physical_device, vk);
++
++   if (iview->vk.format == image->vk.format ||
++       pdev->options12.RelaxedFormatCastingSupported ||
++       !(image->vk.create_flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) ||
++       dzn_format_is_emulated(pdev, image->vk.format) ||
++       iview->vk.aspects != VK_IMAGE_ASPECT_COLOR_BIT ||
++       dzn_get_typeless_dxgi_format(image->desc.Format) != image->desc.Format)
++      return iview->vk.format;
++
++   DXGI_FORMAT view_dxgi =
++      dzn_image_get_dxgi_format(pdev, iview->vk.format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
++                                VK_IMAGE_ASPECT_COLOR_BIT);
++   return dzn_get_typeless_dxgi_format(view_dxgi) == image->desc.Format ?
++          iview->vk.format : image->vk.format;
++}
++
++static void
++dzn_image_view_keep_castable(struct dzn_image_view *iview,
++                             const struct dzn_image *image)
++{
++   struct dzn_physical_device *pdev =
++      container_of(iview->vk.base.device->physical, struct dzn_physical_device, vk);
++
++   if (pdev->options12.RelaxedFormatCastingSupported ||
++       !(image->vk.create_flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) ||
++       dzn_format_is_emulated(pdev, image->vk.format) ||
++       iview->vk.aspects != VK_IMAGE_ASPECT_COLOR_BIT ||
++       dzn_get_typeless_dxgi_format(image->desc.Format) != image->desc.Format)
++      return;
++
++   iview->srv_desc.Format =
++      dzn_image_view_castable_format(pdev, image, iview->srv_desc.Format,
++                                     iview->vk.usage & ~VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
++                                     iview->vk.aspects);
++   if (iview->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) {
++      iview->uav_desc.Format =
++         dzn_image_view_castable_format(pdev, image, iview->uav_desc.Format,
++                                        VK_IMAGE_USAGE_STORAGE_BIT, iview->vk.aspects);
++      DXGI_FORMAT int_format =
++         dzn_image_view_castable_format(pdev, image, iview->int_uav_desc.Format,
++                                        VK_IMAGE_USAGE_STORAGE_BIT, iview->vk.aspects);
++      if (int_format != iview->int_uav_desc.Format) {
++         /* Keep the integer view an integer one, of the image's format */
++         enum pipe_format own_int =
++            dzn_storage_image_int_format(vk_format_to_pipe_format(image->vk.format));
++         if (pdev->storage_image_int_views && own_int != PIPE_FORMAT_NONE)
++            int_format = dzn_pipe_to_dxgi_format(own_int);
++      }
++      iview->int_uav_desc.Format = int_format;
++   }
++   if (iview->vk.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
++      iview->rtv_desc.Format =
++         dzn_image_view_castable_format(pdev, image, iview->rtv_desc.Format,
++                                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, iview->vk.aspects);
++}
++
+ void
+ dzn_image_view_init(struct dzn_device *device,
+                     struct dzn_image_view *iview,
+@@ -1500,6 +1602,8 @@ dzn_image_view_init(struct dzn_device *device,
+ 
+    if (iview->vk.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+       dzn_image_view_prepare_dsv_desc(iview);
++
++   dzn_image_view_keep_castable(iview, image);
+ }
+ 
+ static void
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 39747b5..e92349f 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -1551,6 +1551,9 @@ struct dzn_sampler {
+ 
+ DXGI_FORMAT dzn_pipe_to_dxgi_format(enum pipe_format in);
+ DXGI_FORMAT dzn_get_typeless_dxgi_format(DXGI_FORMAT in);
++
++VkFormat
++dzn_image_view_d3d12_format(const struct dzn_image_view *iview);
+ D3D12_FILTER dzn_translate_sampler_filter(const struct dzn_physical_device *pdev,
+                                           const VkSamplerCreateInfo *create_info);
+ D3D12_COMPARISON_FUNC dzn_translate_compare_op(VkCompareOp in);

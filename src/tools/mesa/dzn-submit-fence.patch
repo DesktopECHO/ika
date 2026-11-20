@@ -1,0 +1,46 @@
+dzn: Signal the queue fence even when a submit fails halfway
+
+The queries a submit ends wait for the queue fence's next point. When a
+later event signal or semaphore signal failed, the submit returned before
+signalling it, so the queries waited for the next submit's work. The point
+is now signalled once the command lists run, whatever failed after, and
+the error is still returned.
+
+After Oliver Bestmann's commit 864bcda in github.com/weaselway/mesa (MIT),
+without its DRM syncobj part.
+
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index 4b7bcc2..f869d51 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -2378,7 +2378,7 @@ dzn_queue_submit(struct vk_queue *q,
+ 
+       util_dynarray_foreach(&cmd_buffer->events.signal, struct dzn_cmd_event_signal, evt) {
+          if (FAILED(ID3D12CommandQueue_Signal(queue->cmdqueue, evt->event->fence, evt->value ? 1 : 0)))
+-            return vk_error(device, VK_ERROR_UNKNOWN);
++            result = vk_error(device, VK_ERROR_UNKNOWN);
+       }
+ 
+       util_dynarray_foreach(&cmd_buffer->queries.signal, struct dzn_cmd_buffer_query_range, range) {
+@@ -2393,16 +2393,18 @@ dzn_queue_submit(struct vk_queue *q,
+       }
+    }
+ 
+-   for (uint32_t i = 0; i < info->signal_count; i++) {
++   for (uint32_t i = 0; i < info->signal_count && result == VK_SUCCESS; i++) {
+       result = dzn_queue_sync_signal(queue, &info->signals[i]);
+       if (result != VK_SUCCESS)
+-         return vk_error(device, VK_ERROR_UNKNOWN);
++         result = vk_error(device, VK_ERROR_UNKNOWN);
+    }
+ 
++   /* Also after an error above: the queries this submit signals wait for
++    * this point, and would otherwise wait for the next submit. */
+    if (FAILED(ID3D12CommandQueue_Signal(queue->cmdqueue, queue->fence, ++queue->fence_point)))
+       return vk_error(device, VK_ERROR_UNKNOWN);
+ 
+-   return VK_SUCCESS;
++   return result;
+ }
+ 
+ static void

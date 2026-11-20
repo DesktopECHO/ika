@@ -1,0 +1,27 @@
+dzn: Skip indirect draws with a draw count of 0
+
+vkCmdDraw*Indirect with drawCount 0, or vkCmdDraw*IndirectCount with
+maxDrawCount 0, made Dozen allocate a zero-sized internal buffer. The
+allocation failed and vkEndCommandBuffer returned
+VK_ERROR_OUT_OF_DEVICE_MEMORY, so the whole command buffer was lost. Such
+a draw does nothing, so it returns at once.
+
+From Oliver Bestmann's commit 8f00b5e in github.com/weaselway/mesa (MIT),
+where dEQP-VK.draw.renderpass.indirect_draw.* passes (the count_0 case
+failed before).
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 8b87abe..99fbb22 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -4717,6 +4717,10 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
+                              uint32_t draw_buf_stride,
+                              bool indexed)
+ {
++   /* Nothing to draw, and a zero-sized exec buffer fails to allocate */
++   if (max_draw_count == 0)
++      return;
++
+    struct dzn_device *device = container_of(cmdbuf->vk.base.device, struct dzn_device, vk);
+    struct dzn_physical_device *pdev = container_of(device->vk.physical, struct dzn_physical_device, vk);
+    struct dzn_graphics_pipeline *pipeline = (struct dzn_graphics_pipeline *)

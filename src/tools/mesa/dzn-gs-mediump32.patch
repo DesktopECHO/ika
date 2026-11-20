@@ -1,0 +1,26 @@
+dzn: Keep geometry shaders' mediump maths at 32 bits
+
+NVIDIA's Direct3D 12 driver (an RTX 4080 Laptop GPU under WSL2) refuses a
+geometry shader with 16-bit mediump maths, E_INVALIDARG, which Dozen
+reports as VK_ERROR_OUT_OF_HOST_MEMORY, although it has native 16-bit
+operations and takes the same maths in other stages: a mediump int loop
+counter in dEQP-VK.geometry.basic.output_vary_* was enough. Geometry
+shaders keep RelaxedPrecision maths at 32 bits.
+
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index 3a796d3..a3a6e98 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -483,7 +483,11 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
+    struct dzn_physical_device *pdev =
+       container_of(device->vk.physical, struct dzn_physical_device, vk);
+    struct spirv_to_nir_options spirv_opts = *dxil_spirv_nir_get_spirv_options();
+-   if (dzn_device_disables_mediump16(device)) {
++   /* NVIDIA's driver refuses geometry shaders with 16-bit mediump maths
++    * (E_INVALIDARG), even where it has native 16-bit operations: keep it at
++    * 32 bits there.
++    */
++   if (dzn_device_disables_mediump16(device) || stage == MESA_SHADER_GEOMETRY) {
+       spirv_opts.mediump_16bit_alu = false;
+       spirv_opts.mediump_16bit_derivatives = false;
+    }

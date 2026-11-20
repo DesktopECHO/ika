@@ -556,6 +556,57 @@ blend with the `MIN` or `MAX` operation gets `ONE` factors, which these
 operations ignore: Direct3D 12 refuses such a pipeline when a factor names
 the shader's second output.
 
+Ika's Dozen and its shader compiler also carry conformance fixes from
+[Weaselway's Mesa](https://github.com/weaselway/mesa), each found by the
+Vulkan conformance tests. Without them, a command buffer that recorded one of
+these was lost (`vkEndCommandBuffer` failed), drew the wrong pixels or crashed
+Dozen:
+
+- indirect draws with a draw count of 0
+  ([dzn-zero-draw-count.patch](src/tools/mesa/dzn-zero-draw-count.patch));
+- an empty scissor, which NVIDIA's driver did not clip
+  ([dzn-empty-scissor.patch](src/tools/mesa/dzn-empty-scissor.patch));
+- copies of part of a depth or stencil plane, and 3D copies with a padded
+  `bufferImageHeight`
+  ([dzn-copy-regions.patch](src/tools/mesa/dzn-copy-regions.patch));
+- clears and resolves through a view of another format
+  ([dzn-view-format-clears.patch](src/tools/mesa/dzn-view-format-clears.patch));
+- pipeline layouts with null set layouts
+  ([dzn-null-set-layouts.patch](src/tools/mesa/dzn-null-set-layouts.patch));
+- resolves into a slice of a 3D image, and stencil blits past the first layer
+  ([dzn-blit-layers.patch](src/tools/mesa/dzn-blit-layers.patch));
+- integer clears of formats with fewer than four channels
+  ([dzn-int-clear-channels.patch](src/tools/mesa/dzn-int-clear-channels.patch));
+- input attachment usage on formats that cannot be attachments
+  ([dzn-input-attachment-formats.patch](src/tools/mesa/dzn-input-attachment-formats.patch));
+- the stencil test of render pass subpasses without stencil
+  ([dzn-legacy-pass-zsa.patch](src/tools/mesa/dzn-legacy-pass-zsa.patch));
+- queries left waiting after a submit failed halfway
+  ([dzn-submit-fence.patch](src/tools/mesa/dzn-submit-fence.patch));
+- 64-bit float-to-integer conversion on NVIDIA, `isinf` and shared-memory
+  atomics on Intel, `OpQuantizeToF16` on vectors and denormal flushing
+  ([dxil-conformance.patch](src/tools/mesa/dxil-conformance.patch));
+- 16-bit shader types on GPUs without 16-bit shader operations, whose
+  drivers refused such shaders
+  ([dzn-min-precision.patch](src/tools/mesa/dzn-min-precision.patch)).
+
+Running those tests on an RTX 4080 and a UHD 770 under WSL2 found three more
+problems, which Ika's Dozen works around:
+
+- Where the Direct3D 12 driver has no relaxed format casting (the UHD 770), a
+  view of a mutable-format image in another format family, such as an
+  R8G8B8A8 image seen as R32_UINT, was an invalid call, and Intel's driver
+  removed the device for it. Such a view now gets the image's own format: its
+  texels are read with the wrong type, but the device stays, and Dozen logs a
+  warning once
+  ([dzn-mutable-view-family.patch](src/tools/mesa/dzn-mutable-view-family.patch)).
+- NVIDIA's driver refuses geometry shaders with 16-bit `mediump` maths, so
+  geometry shaders keep it at 32 bits
+  ([dzn-gs-mediump32.patch](src/tools/mesa/dzn-gs-mediump32.patch)).
+- Intel's driver crashes creating any pipeline with view instancing, so on
+  Intel Dozen lowers multiview itself
+  ([dzn-intel-no-view-instancing.patch](src/tools/mesa/dzn-intel-no-view-instancing.patch)).
+
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window

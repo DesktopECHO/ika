@@ -1,0 +1,23 @@
+dzn: Find the attachment formats of render pass subpasses for depth-stencil state
+
+The depth-stencil state turns the depth and stencil tests off when the
+attachment has no depth or stencil, but it looked only for
+VkPipelineRenderingCreateInfo, which a pipeline for a render pass subpass
+does not have. The stencil test stayed on for X8_D24_UNORM_PACK32, which
+Dozen keeps as D24_UNORM_S8_UINT, and ran against undefined stencil data.
+
+From Oliver Bestmann's commit 96924ec in github.com/weaselway/mesa (MIT).
+
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index 05be73a..df9c805 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -1936,7 +1936,7 @@ dzn_graphics_pipeline_translate_zsa(struct dzn_device *device,
+ 
+    const VkPipelineDepthStencilStateCreateInfo *in_zsa =
+       dzn_graphics_pipeline_static_rast_discard(pipeline, in) ? NULL : in->pDepthStencilState;
+-   const VkPipelineRenderingCreateInfo *ri = vk_find_struct_const(in, PIPELINE_RENDERING_CREATE_INFO);
++   const VkPipelineRenderingCreateInfo *ri = vk_get_pipeline_rendering_create_info(in);
+ 
+    if (in_zsa) {
+       pipeline->statics.has_depth_stencil_state = true;

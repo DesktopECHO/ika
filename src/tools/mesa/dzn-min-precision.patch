@@ -1,0 +1,113 @@
+dzn: Give GPUs without 16-bit shader operations no 16-bit shader types
+
+On a GPU without native 16-bit operations, small local and shared arrays
+were still made 16-bit, mediump casts to 16-bit integers still asked for
+native 16-bit operations, and, where the driver has no 16-bit
+min-precision either, mediump maths still became min-precision DXIL.
+Direct3D 12 refused those shaders (E_INVALIDARG, reported as
+VK_ERROR_OUT_OF_HOST_MEMORY). Such arrays are now widened to 32 bits,
+float-to-16-bit-integer casts may run at min precision, and a GPU with
+neither keeps mediump maths at 32 bits.
+
+From Oliver Bestmann's commits 7d4c27a, b1b5da4 and 790145c in
+github.com/weaselway/mesa (MIT); the last is adapted to Ika's
+dzn_device_disables_mediump16.
+
+diff --git a/src/microsoft/compiler/nir_to_dxil.c b/src/microsoft/compiler/nir_to_dxil.c
+index 0f37eba..be01a1f 100644
+--- a/src/microsoft/compiler/nir_to_dxil.c
++++ b/src/microsoft/compiler/nir_to_dxil.c
+@@ -2533,6 +2533,10 @@ emit_cast(struct ntd_context *ctx, nir_alu_instr *alu,
+       case nir_op_i2fmp:
+       case nir_op_u2fmp:
+          break;
++      /* As f2imp: out-of-range results are undefined, so min precision does. */
++      case nir_op_f2i16:
++      case nir_op_f2u16:
++         break;
+       default:
+          ctx->mod.feats.native_low_precision = true;
+       }
+diff --git a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+index cdfcc22..d64ced1 100644
+--- a/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
++++ b/src/microsoft/spirv_to_dxil/dxil_spirv_nir.c
+@@ -1091,7 +1091,7 @@ dxil_spirv_nir_passes(nir_shader *nir,
+       NIR_PASS(_, nir, nir_split_struct_vars, nir_var_mem_shared);
+       NIR_PASS(_, nir, dxil_nir_flatten_var_arrays, nir_var_mem_shared);
+       NIR_PASS(_, nir, dxil_nir_lower_var_bit_size, nir_var_mem_shared,
+-                 conf->shader_model_max >= SHADER_MODEL_6_2 ? 16 : 32, 64);
++                 conf->shader_model_max >= SHADER_MODEL_6_2 && !conf->no_native_16bit ? 16 : 32, 64);
+    }
+ 
+    NIR_PASS(_, nir, dxil_nir_lower_int_cubemaps, false);
+@@ -1157,7 +1157,7 @@ dxil_spirv_nir_passes(nir_shader *nir,
+    NIR_PASS(_, nir, nir_split_struct_vars, nir_var_function_temp);
+    NIR_PASS(_, nir, dxil_nir_flatten_var_arrays, nir_var_function_temp);
+    NIR_PASS(_, nir, dxil_nir_lower_var_bit_size, nir_var_function_temp,
+-              conf->shader_model_max >= SHADER_MODEL_6_2 ? 16 : 32, 64);
++              conf->shader_model_max >= SHADER_MODEL_6_2 && !conf->no_native_16bit ? 16 : 32, 64);
+ 
+    NIR_PASS(_, nir, nir_lower_doubles, NULL, nir->options->lower_doubles_options);
+ 
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+index 8f4684c..04145b4 100644
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+@@ -199,6 +199,10 @@ struct dxil_spirv_runtime_conf {
+ 
+    // Affects which features can be used by the shader
+    enum dxil_shader_model shader_model_max;
++
++   // The device has no native 16-bit ops, so small local and shared
++   // variables are widened to 32 bits instead of 16
++   bool no_native_16bit;
+ };
+ 
+ struct dxil_spirv_debug_options {
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index df9c805..3a796d3 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -243,6 +243,16 @@ struct dzn_nir_options {
+    bool drop_3d_image_access;
+ };
+ 
++/* Some drivers without 16-bit min-precision support reject DXIL that uses
++ * min-precision types, so such devices must not get any 16-bit values.
++ */
++static bool
++dzn_no_16bit_shader_types(const struct dzn_physical_device *pdev)
++{
++   return !pdev->options4.Native16BitShaderOpsSupported &&
++          !(pdev->options.MinPrecisionSupport & D3D12_SHADER_MIN_PRECISION_SUPPORT_16_BIT);
++}
++
+ static bool
+ dzn_device_lowers_16bit(const struct dzn_device *device)
+ {
+@@ -270,6 +280,7 @@ dzn_device_disables_mediump16(const struct dzn_device *device)
+       container_of(device->vk.physical->instance, struct dzn_instance, vk);
+ 
+    return dzn_device_lowers_16bit(device) ||
++          dzn_no_16bit_shader_types(container_of(device->vk.physical, struct dzn_physical_device, vk)) ||
+           (instance->debug_flags & DZN_DEBUG_NO_MEDIUMP16);
+ }
+ 
+@@ -509,6 +520,7 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
+       .lower_view_index = options->lower_view_index,
+       .lower_view_index_to_rt_layer = options->lower_view_index_to_rt_layer,
+       .shader_model_max = dzn_get_shader_model(pdev),
++      .no_native_16bit = !pdev->options4.Native16BitShaderOpsSupported,
+    };
+ 
+    dxil_spirv_nir_passes(*nir, &conf, metadata);
+@@ -748,7 +760,7 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
+    struct nir_to_dxil_options opts = {
+       .environment = DXIL_ENVIRONMENT_VULKAN,
+       /* Don't lower 16-bit types if they can only come from min-precision */
+-      .lower_int16 = dzn_device_lowers_16bit(device),
++      .lower_int16 = dzn_device_lowers_16bit(device) || dzn_no_16bit_shader_types(pdev),
+       .shader_model_max = dzn_get_shader_model(pdev),
+       .input_clip_size = input_clip_size,
+       .advanced_texture_ops = pdev->options14.AdvancedTextureOpsSupported,

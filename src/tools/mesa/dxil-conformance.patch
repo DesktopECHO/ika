@@ -1,0 +1,134 @@
+microsoft/compiler: Fix conversions, isinf, atomics and denorm flushing
+
+- f2u64: NVIDIA's DXIL FPToUI to 64 bits clamps at UINT32_MAX; convert
+  through a signed 64-bit integer with a bias of 2^63 instead.
+- isinf(x) is emitted as IsInf, as DXC does: Intel's compiler miscompiles
+  the fcmp with +inf on some GPUs.
+- Atomic loads and stores on shared memory become atomics, as coherent
+  ones already did: Intel Arc does not order plain groupshared accesses
+  against the following barrier.
+- The fquantize2f16 lowering keeps the source swizzle, so each component
+  of a vec4 OpQuantizeToF16 is its own.
+- With DenormFlushToZero, a 32-bit fcanonicalize is lowered to an explicit
+  flush: the drivers fold fmul(a, 1.0) away without flushing.
+
+From Oliver Bestmann's commits b87e6c3, 32392c2, 67c50a9, 5a72552 and
+b4f11b0 in github.com/weaselway/mesa (MIT), each with the
+dEQP-VK.spirv_assembly or memory_model tests it fixes.
+
+diff --git a/src/microsoft/compiler/dxil_nir.c b/src/microsoft/compiler/dxil_nir.c
+index 260499e..ba7fafb 100644
+--- a/src/microsoft/compiler/dxil_nir.c
++++ b/src/microsoft/compiler/dxil_nir.c
+@@ -1617,8 +1617,7 @@ lower_fquantize2f16(struct nir_builder *b, nir_instr *instr, void *data)
+     *      return round(val);
+     */
+    nir_alu_instr *alu = nir_instr_as_alu(instr);
+-   nir_def *src =
+-      alu->src[0].src.ssa;
++   nir_def *src = nir_ssa_for_alu_src(b, alu, 0);
+ 
+    nir_def *neg_inf_cond =
+       nir_flt_imm(b, src, -65504.0f);
+@@ -2631,7 +2630,7 @@ get_atomic_for_load_store(nir_builder *b, nir_intrinsic_instr *intr, unsigned bi
+ static bool
+ lower_coherent_load_store(nir_builder *b, nir_intrinsic_instr *intr, void *context)
+ {
+-   if (!nir_intrinsic_has_access(intr) || (nir_intrinsic_access(intr) & ACCESS_COHERENT) == 0)
++   if (!nir_intrinsic_has_access(intr) || (nir_intrinsic_access(intr) & (ACCESS_COHERENT | ACCESS_ATOMIC)) == 0)
+       return false;
+ 
+    nir_def *atomic_def = NULL;
+diff --git a/src/microsoft/compiler/dxil_nir_algebraic.py b/src/microsoft/compiler/dxil_nir_algebraic.py
+index 7d0010d..2a2785f 100644
+--- a/src/microsoft/compiler/dxil_nir_algebraic.py
++++ b/src/microsoft/compiler/dxil_nir_algebraic.py
+@@ -101,6 +101,22 @@ algebraic_ops = [
+   (('b2b1', 'a'), ('ine', ('b2i32', a), 0)),
+ ]
+ 
++# NVIDIA's FPToUI to 64 bits clamps at UINT32_MAX, FPToSI is fine.
++for sz in (32, 64):
++  algebraic_ops += [
++    (('f2u64', 'a@{}'.format(sz)),
++     ('bcsel', ('flt', a, 9223372036854775808.0), ('f2i64', a),
++      ('ior', ('f2i64', ('fadd', a, -9223372036854775808.0)), -0x8000000000000000))),
++  ]
++
++# fcanonicalize otherwise becomes fmul(a, 1.0), which drivers fold away
++# without flushing denorms, so flush explicitly.
++algebraic_ops += [
++  (('fcanonicalize', 'a@32'),
++   ('bcsel', ('flt', ('fabs', a), 1.1754943508222875e-38), ('iand', a, 0x80000000), a),
++   'nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 32)'),
++]
++
+ no_16bit_conv += [
+   (('f2f32', ('u2u16', 'a@32')), ('unpack_half_x_dxil', a)),
+   (('u2u32', ('f2f16_rtz', 'a@32')), ('pack_half_2x16_split', 'a', 0)),
+diff --git a/src/microsoft/compiler/nir_to_dxil.c b/src/microsoft/compiler/nir_to_dxil.c
+index 02423e8..0f37eba 100644
+--- a/src/microsoft/compiler/nir_to_dxil.c
++++ b/src/microsoft/compiler/nir_to_dxil.c
+@@ -261,6 +261,7 @@ enum dxil_intr {
+    DXIL_INTR_FABS = 6,
+    DXIL_INTR_SATURATE = 7,
+ 
++   DXIL_INTR_ISINF = 9,
+    DXIL_INTR_ISFINITE = 10,
+    DXIL_INTR_ISNORMAL = 11,
+ 
+@@ -657,6 +658,7 @@ unary_func_name(enum dxil_intr intr)
+    case DXIL_INTR_FIRSTBIT_SHI:
+    case DXIL_INTR_FIRSTBIT_LO:
+       return "dx.op.unaryBits";
++   case DXIL_INTR_ISINF:
+    case DXIL_INTR_ISFINITE:
+    case DXIL_INTR_ISNORMAL:
+       return "dx.op.isSpecialFloat";
+@@ -2355,6 +2357,28 @@ emit_shift(struct ntd_context *ctx, nir_alu_instr *alu,
+    return true;
+ }
+ 
++/* Match feq(fabs(x), +inf), which is what GLSL isinf() lowers to, and return x.
++ * Intel's DXIL compiler miscompiles "fcmp oeq (FAbs x), +inf" on some GPUs
++ * (seen on Arc B390), so emit IsInf like DXC does for HLSL isinf().
++ */
++static bool
++match_fabs_eq_inf(nir_alu_instr *alu, nir_scalar *x)
++{
++   nir_scalar cmp = nir_get_scalar(&alu->def, 0);
++   for (unsigned i = 0; i < 2; i++) {
++      nir_scalar abs = nir_scalar_chase_alu_src(cmp, i);
++      nir_scalar other = nir_scalar_chase_alu_src(cmp, 1 - i);
++      if (!nir_scalar_is_const(other) || !nir_scalar_is_alu(abs) ||
++          nir_scalar_alu_op(abs) != nir_op_fabs ||
++          nir_scalar_as_float(other) != INFINITY)
++         continue;
++      *x = nir_scalar_chase_alu_src(abs, 0);
++      /* isSpecialFloat only has f16 and f32 overloads */
++      return x->def->bit_size <= 32;
++   }
++   return false;
++}
++
+ static bool
+ emit_cmp(struct ntd_context *ctx, nir_alu_instr *alu,
+          enum dxil_cmp_pred pred,
+@@ -2988,7 +3012,15 @@ emit_alu(struct ntd_context *ctx, nir_alu_instr *alu)
+    case nir_op_uge:  return emit_cmp(ctx, alu, DXIL_ICMP_UGE, src[0], src[1]);
+    case nir_op_ilt:  return emit_cmp(ctx, alu, DXIL_ICMP_SLT, src[0], src[1]);
+    case nir_op_ult:  return emit_cmp(ctx, alu, DXIL_ICMP_ULT, src[0], src[1]);
+-   case nir_op_feq:  return emit_cmp(ctx, alu, DXIL_FCMP_OEQ, src[0], src[1]);
++   case nir_op_feq: {
++      nir_scalar x;
++      if (match_fabs_eq_inf(alu, &x)) {
++         nir_src x_src = nir_src_for_ssa(x.def);
++         const struct dxil_value *v = get_src(ctx, &x_src, x.comp, nir_type_float);
++         return v && emit_unary_intin(ctx, alu, DXIL_INTR_ISINF, v);
++      }
++      return emit_cmp(ctx, alu, DXIL_FCMP_OEQ, src[0], src[1]);
++   }
+    case nir_op_fneu: return emit_cmp(ctx, alu, DXIL_FCMP_UNE, src[0], src[1]);
+    case nir_op_flt:  return emit_cmp(ctx, alu, DXIL_FCMP_OLT, src[0], src[1]);
+    case nir_op_fge:  return emit_cmp(ctx, alu, DXIL_FCMP_OGE, src[0], src[1]);

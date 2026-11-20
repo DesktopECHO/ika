@@ -1,0 +1,25 @@
+dzn: Lower multiview on Intel instead of using view instancing
+
+Intel's Direct3D 12 driver under WSL2 (a UHD 770) crashes in
+CreatePipelineState for any pipeline state with view instancing, so every
+multiview pipeline crashed the app (dEQP-VK.multiview.masks.* and the
+multiview indirect draws). Dozen's own lowering of the view index, which it
+uses where Direct3D 12 has no view instancing, passes them there.
+
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index f869d51..c90a369 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -1290,7 +1290,11 @@ dzn_physical_device_create(struct vk_instance *instance,
+       goto fail_clean;
+    }
+ 
+-   if (dzn_instance->debug_flags & DZN_DEBUG_MULTIVIEW)
++   /* Intel's Direct3D 12 driver under WSL2 (a UHD 770) crashes creating any
++    * pipeline state with view instancing; Dozen's own multiview lowering
++    * works there.
++    */
++   if ((dzn_instance->debug_flags & DZN_DEBUG_MULTIVIEW) || pdev->desc.vendor_id == 0x8086)
+       pdev->options3.ViewInstancingTier = D3D12_VIEW_INSTANCING_TIER_NOT_SUPPORTED;
+    if (dzn_instance->debug_flags & DZN_DEBUG_NO_16BIT)
+       pdev->options4.Native16BitShaderOpsSupported = false;
