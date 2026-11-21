@@ -607,6 +607,21 @@ problems, which Ika's Dozen works around:
   Intel Dozen lowers multiview itself
   ([dzn-intel-no-view-instancing.patch](src/tools/mesa/dzn-intel-no-view-instancing.patch)).
 
+Ika's Dozen makes a view of a compressed texture in an uncompressed format
+that covers more than one mip level or array layer, such as a view of all
+six faces of a BC3 cube map as 128-bit integers, a null view, which reads
+zeros and drops writes, and logs `dzn: Direct3D 12 cannot view`
+([dzn-block-texel-view-layers.patch](src/tools/mesa/dzn-block-texel-view-layers.patch)).
+Direct3D 12 takes such views one level and one layer at a time, and removed
+the device for others; Vulkan allows them.
+
+Ika's Dozen also gives a storage view of one slice of a 3D image, which
+OpenGL ES makes for an image unit bound to one layer of a 3D texture, a 3D
+view of that slice, as Dozen does for render targets
+([dzn-uav-2d-view-of-3d.patch](src/tools/mesa/dzn-uav-2d-view-of-3d.patch)).
+Direct3D 12 has no 2D view of a 3D texture and removed the device for one,
+which took down the VM on an RTX 4080 and a UHD 770.
+
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window

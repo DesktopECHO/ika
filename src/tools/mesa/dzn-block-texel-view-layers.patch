@@ -1,0 +1,169 @@
+dzn: Make block-texel views of several layers or levels null instead of losing the device
+
+Vulkan lets a block-compressed image created with
+VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT be viewed in an
+uncompressed format of the block's size, such as an R32G32B32A32_UINT view
+of a BC3 image, over any number of array layers. Direct3D 12 casts a
+compressed resource to an uncompressed format only in a view of one mip
+level and one layer, and answers other views by removing the device, which
+loses every Vulkan device on it. gfxstream's GPU texture decoder made such a
+view of all six faces of a BC3 cube map (dEQP-GLES31 copy_image of ASTC cube
+maps, RTX 4080 Laptop GPU under WSL2), and the Android VM went down.
+
+Create a shader resource or unordered access view of that kind as a null
+descriptor: reads return zero and writes are dropped, and Dozen logs one
+warning. Other views are unchanged.
+
+Generated-by: LLM
+
+diff --git a/src/microsoft/vulkan/dzn_descriptor_set.c b/src/microsoft/vulkan/dzn_descriptor_set.c
+--- a/src/microsoft/vulkan/dzn_descriptor_set.c
++++ b/src/microsoft/vulkan/dzn_descriptor_set.c
+@@ -1108,10 +1108,11 @@
+ {
+    D3D12_CPU_DESCRIPTOR_HANDLE view_handle =
+       dzn_descriptor_heap_get_cpu_handle(heap, desc_offset);
+-   struct dzn_image *image = container_of(iview->vk.image, struct dzn_image, vk);
+ 
+    if (writeable) {
+-      ID3D12Device1_CreateUnorderedAccessView(device->dev, image->res, NULL, &iview->uav_desc, view_handle);
++      ID3D12Device1_CreateUnorderedAccessView(device->dev,
++                                              dzn_image_view_resource(iview, iview->uav_desc.Format, true),
++                                              NULL, &iview->uav_desc, view_handle);
+    } else if (cube_as_2darray &&
+               (iview->srv_desc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURECUBEARRAY ||
+                iview->srv_desc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURECUBE)) {
+@@ -1137,9 +1138,13 @@
+          srv_desc.Texture2DArray.ArraySize = 6;
+       }
+ 
+-      ID3D12Device1_CreateShaderResourceView(device->dev, image->res, &srv_desc, view_handle);
++      ID3D12Device1_CreateShaderResourceView(device->dev,
++                                             dzn_image_view_resource(iview, srv_desc.Format, false),
++                                             &srv_desc, view_handle);
+    } else {
+-      ID3D12Device1_CreateShaderResourceView(device->dev, image->res, &iview->srv_desc, view_handle);
++      ID3D12Device1_CreateShaderResourceView(device->dev,
++                                             dzn_image_view_resource(iview, iview->srv_desc.Format, false),
++                                             &iview->srv_desc, view_handle);
+    }
+ }
+ 
+@@ -1149,9 +1154,10 @@
+                                              uint32_t desc_offset,
+                                              const struct dzn_image_view *iview)
+ {
+-   struct dzn_image *image = container_of(iview->vk.image, struct dzn_image, vk);
+ 
+-   ID3D12Device1_CreateUnorderedAccessView(device->dev, image->res, NULL, &iview->int_uav_desc,
++   ID3D12Device1_CreateUnorderedAccessView(device->dev,
++                                           dzn_image_view_resource(iview, iview->int_uav_desc.Format, true),
++                                           NULL, &iview->int_uav_desc,
+                                            dzn_descriptor_heap_get_cpu_handle(heap, desc_offset));
+ }
+ 
+diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
+--- a/src/microsoft/vulkan/dzn_image.c
++++ b/src/microsoft/vulkan/dzn_image.c
+@@ -25,6 +25,7 @@
+ 
+ #include "vk_alloc.h"
+ #include "vk_debug_report.h"
++#include "vk_enum_to_str.h"
+ #include "vk_format.h"
+ #include "vk_util.h"
+ 
+@@ -1551,6 +1552,72 @@
+                                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, iview->vk.aspects);
+ }
+ 
++static bool
++dzn_dxgi_format_is_block_compressed(DXGI_FORMAT format)
++{
++   switch (dzn_get_typeless_dxgi_format(format)) {
++   case DXGI_FORMAT_BC1_TYPELESS:
++   case DXGI_FORMAT_BC2_TYPELESS:
++   case DXGI_FORMAT_BC3_TYPELESS:
++   case DXGI_FORMAT_BC4_TYPELESS:
++   case DXGI_FORMAT_BC5_TYPELESS:
++   case DXGI_FORMAT_BC6H_TYPELESS:
++   case DXGI_FORMAT_BC7_TYPELESS:
++      return true;
++   default:
++      return false;
++   }
++}
++
++/* Whether Direct3D 12 refuses a view in this format of the image, the view
++ * covering more than one mip level or array layer when multi is set: a view
++ * of a block-compressed resource in an uncompressed format (Vulkan's
++ * block-texel view, such as an R32G32B32A32_UINT view of a BC3 image) must
++ * cover one mip level and one layer. Direct3D 12 answers such a view by
++ * removing the device, which loses every Vulkan device on it.
++ */
++static bool
++dzn_image_view_is_refused(const struct dzn_image *image, DXGI_FORMAT format, bool multi)
++{
++   return multi && format != DXGI_FORMAT_UNKNOWN &&
++          dzn_dxgi_format_is_block_compressed(image->desc.Format) &&
++          !dzn_dxgi_format_is_block_compressed(format);
++}
++
++/* The resource to create a shader resource or unordered access view of the
++ * image view from: the image's, or NULL for a null descriptor (reads return
++ * zero, writes are dropped) when Direct3D 12 would refuse the view.
++ */
++ID3D12Resource *
++dzn_image_view_resource(const struct dzn_image_view *iview, DXGI_FORMAT format, bool uav)
++{
++   const struct dzn_image *image = container_of(iview->vk.image, struct dzn_image, vk);
++   bool multi = iview->vk.layer_count > 1 || (!uav && iview->vk.level_count > 1);
++
++   return dzn_image_view_is_refused(image, format, multi) ? NULL : image->res;
++}
++
++static void
++dzn_image_view_warn_refused(const struct dzn_image_view *iview)
++{
++   static bool warned;
++   const struct dzn_image *image = container_of(iview->vk.image, struct dzn_image, vk);
++   bool refused = dzn_image_view_resource(iview, iview->srv_desc.Format, false) == NULL && image->res;
++
++   if (iview->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT)
++      refused = refused ||
++                (image->res && (dzn_image_view_resource(iview, iview->uav_desc.Format, true) == NULL ||
++                                dzn_image_view_resource(iview, iview->int_uav_desc.Format, true) == NULL));
++
++   if (refused && !warned) {
++      warned = true;
++      mesa_logw("dzn: Direct3D 12 cannot view a %s image as %s across %u mip levels and %u "
++                "layers; the view reads zeros and drops writes",
++                vk_Format_to_str(image->vk.format), vk_Format_to_str(iview->vk.format),
++                iview->vk.level_count, iview->vk.layer_count);
++   }
++}
++
+ void
+ dzn_image_view_init(struct dzn_device *device,
+                     struct dzn_image_view *iview,
+@@ -1604,6 +1671,7 @@
+       dzn_image_view_prepare_dsv_desc(iview);
+ 
+    dzn_image_view_keep_castable(iview, image);
++   dzn_image_view_warn_refused(iview);
+ }
+ 
+ static void
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -1554,6 +1554,9 @@
+ 
+ VkFormat
+ dzn_image_view_d3d12_format(const struct dzn_image_view *iview);
++
++ID3D12Resource *
++dzn_image_view_resource(const struct dzn_image_view *iview, DXGI_FORMAT format, bool uav);
+ D3D12_FILTER dzn_translate_sampler_filter(const struct dzn_physical_device *pdev,
+                                           const VkSamplerCreateInfo *create_info);
+ D3D12_COMPARISON_FUNC dzn_translate_compare_op(VkCompareOp in);

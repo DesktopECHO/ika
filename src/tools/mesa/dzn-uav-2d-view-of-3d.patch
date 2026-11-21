@@ -1,0 +1,37 @@
+dzn: Build a storage view of slices of a 3D image as a 3D view
+
+OpenGL ES 3.1 binds one layer of a 3D texture to an image unit
+(glBindImageTexture with layered GL_FALSE), which ANGLE turns into a 2D
+Vulkan view of one slice of the 3D image. Dozen made a Texture2D unordered
+access view of the 3D resource, an invalid call D3D12 answers by removing
+the device: every Vulkan device on it is lost, and the Android VM went down
+(dEQP-GLES31 image_load_store 3d *_single_layer, Intel UHD 770 and RTX 4080
+Laptop GPU under WSL2).
+
+Build it as a Texture3D unordered access view of those slices
+(FirstWSlice, WSize), as Dozen already does for the render target view of
+a 2D view of a 3D image.
+
+Generated-by: LLM
+
+diff --git a/src/microsoft/vulkan/dzn_image.c b/src/microsoft/vulkan/dzn_image.c
+--- a/src/microsoft/vulkan/dzn_image.c
++++ b/src/microsoft/vulkan/dzn_image.c
+@@ -1290,7 +1290,16 @@
+    case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
+    case VK_IMAGE_VIEW_TYPE_CUBE:
+    case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
+-      if (use_array) {
++      if (iview->vk.image->image_type == VK_IMAGE_TYPE_3D) {
++         /* A 2D view of slices of a 3D image (an OpenGL ES image unit bound
++          * to one layer of a 3D texture): D3D12 has no 2D view of a 3D
++          * resource and removes the device for one, but a 3D view can select
++          * the slices, as the render target view does. */
++         iview->uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
++         iview->uav_desc.Texture3D.MipSlice = iview->vk.base_mip_level;
++         iview->uav_desc.Texture3D.FirstWSlice = iview->vk.base_array_layer;
++         iview->uav_desc.Texture3D.WSize = iview->vk.layer_count;
++      } else if (use_array) {
+          iview->uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+          iview->uav_desc.Texture2DArray.PlaneSlice = 0;
+          iview->uav_desc.Texture2DArray.MipSlice = iview->vk.base_mip_level;
