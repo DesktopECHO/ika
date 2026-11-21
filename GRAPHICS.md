@@ -638,8 +638,14 @@ from the last vertex of a triangle or line when the pipeline asks for it,
 as ANGLE does for OpenGL ES
 ([dzn-provoking-vertex-last.patch](src/tools/mesa/dzn-provoking-vertex-last.patch)).
 Dozen advertised that mode but took the first vertex, as Direct3D 12 does,
-so such values came from the wrong vertex. It needs a GPU with barycentrics
-support in Direct3D 12; triangle strips still take the first vertex.
+so such values came from the wrong vertex. On a GPU with barycentrics
+support in Direct3D 12 the fragment shader reads them at the last vertex,
+except in triangle strips, which still take the first vertex. Intel's
+drivers under WSL2 have no barycentrics; there a pipeline whose fragment
+shader has flat inputs gets a small geometry shader that copies the last
+vertex's flat values to every vertex of each line or triangle, strips and
+fans included
+([dzn-flat-vertex-gs.patch](src/tools/mesa/dzn-flat-vertex-gs.patch)).
 
 Ika's Dozen copies between a 3D texture and a 2D or array one of a
 different but compatible format a slice at a time
@@ -649,10 +655,18 @@ Intel's driver copies them into the wrong texels with Direct3D 12's texture
 copy
 ([dzn-intel-8bit-copies.patch](src/tools/mesa/dzn-intel-8bit-copies.patch)).
 
-Intel's Direct3D 12 driver under WSL2 (a UHD 770) has two bugs Ika's Dozen
-does not work around: it ignores the blend constant (`glBlendColor`), and it
-does not clamp a shadow lookup's reference value to [0, 1] for 16- and
-24-bit depth textures.
+Intel's Direct3D 12 driver for a UHD 770 under WSL2 ignores the blend
+constant (`glBlendColor`), and writes nothing for a dual-source blend whose
+alpha factors take the second source when the blend writes no alpha (alpha
+masked out, or a format without alpha). On Intel GPUs Ika's Dozen hands a
+blend with the constant to the GPU as a dual-source blend, the fragment
+shader writing the constant as its second output, and gives a blend that
+writes no alpha plain alpha factors
+([dzn-intel-blend.patch](src/tools/mesa/dzn-intel-blend.patch)). The same
+driver does not clamp a shadow lookup's reference value to [0, 1] for 16-
+and 24-bit depth textures, which Ika's Dozen does not work around: a shader
+cannot tell those from 32-bit float depth textures, whose reference must
+not be clamped.
 
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL

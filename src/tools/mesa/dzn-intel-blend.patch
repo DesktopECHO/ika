@@ -1,0 +1,384 @@
+dzn: Work around two blending bugs of Intel's Direct3D 12 driver
+
+Intel's driver for a UHD 770 under WSL2 (32.0.101.7092) ignores the blend
+factor of OMSetBlendFactor: it blends as if each colour channel of the
+constant were rounded to 0 or 1 and its alpha were 0, so every
+glBlendColor blend of an OpenGL ES app came out wrong (1513 dEQP-GLES2 and
+GLES3 fragment_ops.blend failures; dEQP-VK.dynamic_state cb_state, and
+about half of the dEQP-VK.pipeline blend states with constants, on every
+format). The driver of an Iris Plus 650 (31.0.101.2145) blends the
+constants correctly.
+
+On Intel, a pipeline that blends one colour attachment with constant
+factors, without a logic op or dual-source factors of its own, takes the
+constants as dual-source (SRC1) factors instead: its fragment shader
+writes the blend constants, from a new blend_constants field of the
+runtime data, as its second output.
+
+The same driver writes nothing for a dual-source blend whose alpha factors
+take SRC1 when the blend does not write alpha: alpha is out of the write
+mask, or the format has none (R8G8, R16, R5G6B5 and the like). On Intel,
+alpha factors of a blend that does not write alpha are ONE and ZERO, and
+they do not count when deciding on the constants above.
+
+A fragment shader that already writes a second output the blend does not
+use gets the constants in that output.
+
+dEQP-VK.pipeline.monolithic.blend on a UHD 770: 1151 failures, down from
+4481 (r8g8b8a8_unorm states: 100 of 100, up from 39); none new on an RTX
+4080. Constant blending on more than one colour attachment stays wrong on
+the UHD 770, as Direct3D 12 blends with two sources only into one.
+
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+index 23df49f..25c1abc 100644
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+@@ -136,6 +136,10 @@ struct dxil_spirv_vertex_runtime_data {
+     * inputs of the fragment shader come from, 1 or 2, or 3 for a triangle
+     * strip (2 for its even triangles, 1 for its odd ones). */
+    uint32_t flat_vertex;
++   /* The blend constants, which Dozen's fragment shaders write as their
++    * second (dual-source) output where the Direct3D 12 driver ignores the
++    * blend factor. */
++   float blend_constants[4];
+ };
+ 
+ enum dxil_spirv_yz_flip_mode {
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 542fae4..cc3d7f9 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -4061,6 +4061,21 @@ dzn_cmd_buffer_rasterization_disabled(const struct dzn_cmd_buffer *cmdbuf,
+    }
+ }
+ 
++/* The blend constants for fragment shaders that write them as a dual-source
++ * output (dzn_nir_write_blend_constants_src1) */
++static void
++dzn_cmd_buffer_set_sysval_blend_constants(struct dzn_cmd_buffer *cmdbuf)
++{
++   if (memcmp(cmdbuf->state.sysvals.gfx.blend_constants, cmdbuf->state.blend.constants,
++              sizeof(cmdbuf->state.sysvals.gfx.blend_constants)) == 0)
++      return;
++
++   memcpy(cmdbuf->state.sysvals.gfx.blend_constants, cmdbuf->state.blend.constants,
++          sizeof(cmdbuf->state.sysvals.gfx.blend_constants));
++   cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |=
++      DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
++}
++
+ /* The vertex, in the primitive a geometry shader gets, of the last vertex of a
+  * Vulkan primitive, for the flat inputs of the fragment shader
+  * (dzn_nir_flat_vertex_gs). Direct3D 12's own triangle fans hand over
+@@ -6319,6 +6334,7 @@ dzn_CmdBindPipeline(VkCommandBuffer commandBuffer,
+                 sizeof(cmdbuf->state.blend.constants));
+       }
+       cmdbuf->state.dirty |= DZN_CMD_DIRTY_BLEND_CONSTANTS;
++      dzn_cmd_buffer_set_sysval_blend_constants(cmdbuf);
+ 
+       if (!(gfx->dynamic & DZN_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE)) {
+          for (uint32_t vb = 0; vb < gfx->vb.count; vb++)
+@@ -7168,6 +7184,7 @@ dzn_CmdSetBlendConstants(VkCommandBuffer commandBuffer,
+    memcpy(cmdbuf->state.blend.constants, blendConstants,
+           sizeof(cmdbuf->state.blend.constants));
+    cmdbuf->state.dirty |= DZN_CMD_DIRTY_BLEND_CONSTANTS;
++   dzn_cmd_buffer_set_sysval_blend_constants(cmdbuf);
+ }
+ 
+ VKAPI_ATTR void VKAPI_CALL
+diff --git a/src/microsoft/vulkan/dzn_nir.c b/src/microsoft/vulkan/dzn_nir.c
+index 10e02d0..bb3fdaf 100644
+--- a/src/microsoft/vulkan/dzn_nir.c
++++ b/src/microsoft/vulkan/dzn_nir.c
+@@ -1149,3 +1149,71 @@ dzn_nir_flat_vertex_gs(const nir_shader *vs, const nir_shader *fs, bool lines,
+    NIR_PASS(_, nir, nir_lower_var_copies);
+    return nir;
+ }
++
++/* Where the Direct3D 12 driver ignores the blend factor, Dozen turns constant
++ * blend factors into dual-source (SRC1) ones, and the fragment shader writes
++ * the blend constants, from the runtime data, as its second output.
++ */
++void
++dzn_nir_write_blend_constants_src1(nir_shader *fs,
++                                   uint32_t runtime_data_register_space,
++                                   uint32_t runtime_data_base_shader_register)
++{
++   nir_function_impl *impl = nir_shader_get_entrypoint(fs);
++   nir_builder builder = nir_builder_at(nir_after_impl(impl));
++   nir_builder *b = &builder;
++
++   nir_binding binding = {
++      .binding = runtime_data_base_shader_register,
++      .desc_set = runtime_data_register_space,
++      .success = true,
++   };
++   if (!nir_get_binding_variable(fs, binding)) {
++      const struct glsl_struct_field runtime_data_field = {
++         glsl_array_type(glsl_uint_type(),
++                         sizeof(struct dxil_spirv_vertex_runtime_data) / sizeof(unsigned),
++                         sizeof(unsigned)),
++         "arr"
++      };
++      nir_variable *runtime_data =
++         nir_variable_create(fs, nir_var_mem_ubo,
++                             glsl_struct_type(&runtime_data_field, 1, "runtime_data", false),
++                             "runtime_data");
++      runtime_data->data.descriptor_set = runtime_data_register_space;
++      runtime_data->data.binding = runtime_data_base_shader_register;
++      runtime_data->data.how_declared = nir_var_hidden;
++   }
++
++   nir_def *constants[4];
++   for (unsigned i = 0; i < 4; i++) {
++      constants[i] =
++         load_vertex_runtime_data(b, runtime_data_register_space,
++                                  runtime_data_base_shader_register,
++                                  offsetof(struct dxil_spirv_vertex_runtime_data, blend_constants) + i * 4);
++   }
++
++   /* A shader can write a second output that the blend does not use; the
++    * constants take its place, written last. */
++   nir_variable *out = NULL;
++   nir_foreach_shader_out_variable(var, fs) {
++      if (var->data.location == FRAG_RESULT_DATA0 && var->data.index == 1)
++         out = var;
++   }
++
++   if (out && glsl_get_bare_type(out->type) == glsl_vec4_type()) {
++      nir_store_var(b, out, nir_vec(b, constants, 4), 0xf);
++      return;
++   }
++   if (out) {
++      /* Not a vec4: keep the shader's writes, to a variable of its own */
++      out->data.mode = nir_var_shader_temp;
++      nir_fixup_deref_modes(fs);
++   }
++
++   out = nir_variable_create(fs, nir_var_shader_out, glsl_vec4_type(), "dzn_blend_constants");
++   out->data.location = FRAG_RESULT_DATA0;
++   out->data.index = 1;
++   nir_store_var(b, out, nir_vec(b, constants, 4), 0xf);
++
++   dxil_sort_ps_outputs(fs);
++}
+diff --git a/src/microsoft/vulkan/dzn_nir.h b/src/microsoft/vulkan/dzn_nir.h
+index f194f81..990a6be 100644
+--- a/src/microsoft/vulkan/dzn_nir.h
++++ b/src/microsoft/vulkan/dzn_nir.h
+@@ -145,6 +145,11 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *vs, struct dzn_nir_point_gs_info
+ 
+ #define DZN_FLAT_VERTEX_STRIP 3
+ 
++void
++dzn_nir_write_blend_constants_src1(nir_shader *fs,
++                                   uint32_t runtime_data_register_space,
++                                   uint32_t runtime_data_base_shader_register);
++
+ nir_shader *
+ dzn_nir_flat_vertex_gs(const nir_shader *vs, const nir_shader *fs, bool lines,
+                        uint32_t runtime_data_register_space,
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index bef9948..5559586 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -1307,6 +1307,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+       _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->use_gs_for_polygon_mode_point, sizeof(pipeline->use_gs_for_polygon_mode_point));
+       _mesa_blake3_update(&pipeline_hash_ctx, &fs_provoking_vertex, sizeof(fs_provoking_vertex));
+       _mesa_blake3_update(&pipeline_hash_ctx, &flat_vertex_gs, sizeof(flat_vertex_gs));
++      _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->blend.constants_src1, sizeof(pipeline->blend.constants_src1));
+ 
+       u_foreach_bit(stage, active_stage_mask) {
+          const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroup_size_info =
+@@ -1357,8 +1358,10 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+          }
+          if (stage == MESA_SHADER_VERTEX)
+             _mesa_blake3_update(&nir_hash_ctx, attribs_hash, sizeof(attribs_hash));
+-         if (stage == MESA_SHADER_FRAGMENT)
++         if (stage == MESA_SHADER_FRAGMENT) {
+             _mesa_blake3_update(&nir_hash_ctx, &fs_provoking_vertex, sizeof(fs_provoking_vertex));
++            _mesa_blake3_update(&nir_hash_ctx, &pipeline->blend.constants_src1, sizeof(pipeline->blend.constants_src1));
++         }
+          if (stage == last_raster_stage) {
+             _mesa_blake3_update(&nir_hash_ctx, &yz_flip_mode, sizeof(yz_flip_mode));
+             _mesa_blake3_update(&nir_hash_ctx, &y_flip_mask, sizeof(y_flip_mask));
+@@ -1394,6 +1397,10 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+          pipeline->needs_draw_sysvals = metadata.needs_draw_sysvals;
+    }
+ 
++   if (pipeline->blend.constants_src1 && (active_stage_mask & BITFIELD_BIT(MESA_SHADER_FRAGMENT)))
++      dzn_nir_write_blend_constants_src1(pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir,
++                                         DZN_REGISTER_SPACE_SYSVALS, 0);
++
+    if (flat_vertex_gs && (active_stage_mask & BITFIELD_BIT(MESA_SHADER_FRAGMENT))) {
+       bool lines = to_prim_topology_type(info->pInputAssemblyState->topology) ==
+                    D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+@@ -2273,10 +2280,83 @@ translate_logic_op(VkLogicOp in)
+    }
+ }
+ 
++static bool
++is_dual_source_blend_factor(VkBlendFactor factor)
++{
++   return factor == VK_BLEND_FACTOR_SRC1_COLOR ||
++          factor == VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR ||
++          factor == VK_BLEND_FACTOR_SRC1_ALPHA ||
++          factor == VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
++}
++
++/* A constant blend factor as a dual-source one (blend.constants_src1) */
++static D3D12_BLEND
++translate_blend_factor_src1(VkBlendFactor in, bool is_alpha, bool support_alpha_blend_factor)
++{
++   switch (in) {
++   case VK_BLEND_FACTOR_CONSTANT_COLOR:
++      return is_alpha ? D3D12_BLEND_SRC1_ALPHA : D3D12_BLEND_SRC1_COLOR;
++   case VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR:
++      return is_alpha ? D3D12_BLEND_INV_SRC1_ALPHA : D3D12_BLEND_INV_SRC1_COLOR;
++   case VK_BLEND_FACTOR_CONSTANT_ALPHA:
++      return D3D12_BLEND_SRC1_ALPHA;
++   case VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA:
++      return D3D12_BLEND_INV_SRC1_ALPHA;
++   default:
++      return translate_blend_factor(in, is_alpha, support_alpha_blend_factor);
++   }
++}
++
++/* Whether a blend writes the alpha of its attachment: alpha is in its write
++ * mask, and its format has alpha.
++ */
++static bool
++dzn_blend_writes_alpha(const VkPipelineColorBlendAttachmentState *att, VkFormat format)
++{
++   return (att->colorWriteMask & VK_COLOR_COMPONENT_A_BIT) &&
++          (format == VK_FORMAT_UNDEFINED ||
++           util_format_has_alpha(vk_format_to_pipe_format(format)));
++}
++
++/* Intel's Direct3D 12 driver for 12th-generation and newer GPUs (32.0.101.7092
++ * on a UHD 770 under WSL2) ignores the blend factor (OMSetBlendFactor): it
++ * blends with each colour channel rounded to 0 or 1 and an alpha of 0. Where
++ * a pipeline can, it takes the constants as a second, dual-source output of
++ * its fragment shader instead: one colour attachment, no logic op and no
++ * dual-source factors of its own. Older Intel drivers blend the constants
++ * correctly, and take the dual-source path as well. Alpha factors count only
++ * where the blend writes alpha (see dzn_graphics_pipeline_translate_blend). */
++static bool
++dzn_graphics_pipeline_blend_constants_src1(const struct dzn_physical_device *pdev,
++                                           const VkPipelineColorBlendStateCreateInfo *in_blend,
++                                           VkFormat format)
++{
++   if (pdev->desc.vendor_id != 0x8086 || in_blend->logicOpEnable ||
++       in_blend->attachmentCount != 1 || !in_blend->pAttachments[0].blendEnable)
++      return false;
++
++   const VkPipelineColorBlendAttachmentState *att = &in_blend->pAttachments[0];
++   VkBlendFactor factors[4] = {
++      att->srcColorBlendFactor, att->dstColorBlendFactor,
++      att->srcAlphaBlendFactor, att->dstAlphaBlendFactor,
++   };
++   unsigned count = dzn_blend_writes_alpha(att, format) ? 4 : 2;
++   bool constant = false;
++   for (unsigned i = 0; i < count; i++) {
++      if (is_dual_source_blend_factor(factors[i]))
++         return false;
++      constant |= is_constant_color_blend_factor(factors[i]) ||
++                  is_constant_alpha_blend_factor(factors[i]);
++   }
++   return constant;
++}
++
+ static void
+ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+                                       D3D12_PIPELINE_STATE_STREAM_DESC *out,
+-                                      const VkGraphicsPipelineCreateInfo *in)
++                                      const VkGraphicsPipelineCreateInfo *in,
++                                      const VkFormat *color_fmts,
++                                      uint32_t color_count)
+ {
+    const VkPipelineColorBlendStateCreateInfo *in_blend =
+       dzn_graphics_pipeline_static_rast_discard(pipeline, in) ? NULL : in->pColorBlendState;
+@@ -2300,6 +2380,11 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+    desc->AlphaToCoverageEnable = in_ms->alphaToCoverageEnable;
+    memcpy(pipeline->blend.constants, in_blend->blendConstants,
+           sizeof(pipeline->blend.constants));
++   pipeline->blend.constants_src1 =
++      dzn_graphics_pipeline_blend_constants_src1(pdev, in_blend,
++                                                 color_count > 0 ? color_fmts[0] : VK_FORMAT_UNDEFINED);
++   D3D12_BLEND (*translate_factor)(VkBlendFactor, bool, bool) =
++      pipeline->blend.constants_src1 ? translate_blend_factor_src1 : translate_blend_factor;
+ 
+    for (uint32_t i = 0; i < in_blend->attachmentCount; i++) {
+       if (i > 0 &&
+@@ -2317,15 +2402,15 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+          desc->RenderTarget[i].LogicOp = logicop;
+       } else {
+          desc->RenderTarget[i].SrcBlend =
+-            translate_blend_factor(in_blend->pAttachments[i].srcColorBlendFactor, false, support_alpha_blend_factor);
++            translate_factor(in_blend->pAttachments[i].srcColorBlendFactor, false, support_alpha_blend_factor);
+          desc->RenderTarget[i].DestBlend =
+-            translate_blend_factor(in_blend->pAttachments[i].dstColorBlendFactor, false, support_alpha_blend_factor);
++            translate_factor(in_blend->pAttachments[i].dstColorBlendFactor, false, support_alpha_blend_factor);
+          desc->RenderTarget[i].BlendOp =
+             translate_blend_op(in_blend->pAttachments[i].colorBlendOp);
+          desc->RenderTarget[i].SrcBlendAlpha =
+-            translate_blend_factor(in_blend->pAttachments[i].srcAlphaBlendFactor, true, support_alpha_blend_factor);
++            translate_factor(in_blend->pAttachments[i].srcAlphaBlendFactor, true, support_alpha_blend_factor);
+          desc->RenderTarget[i].DestBlendAlpha =
+-            translate_blend_factor(in_blend->pAttachments[i].dstAlphaBlendFactor, true, support_alpha_blend_factor);
++            translate_factor(in_blend->pAttachments[i].dstAlphaBlendFactor, true, support_alpha_blend_factor);
+          desc->RenderTarget[i].BlendOpAlpha =
+             translate_blend_op(in_blend->pAttachments[i].alphaBlendOp);
+ 
+@@ -2339,6 +2424,18 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+              desc->RenderTarget[i].BlendOpAlpha == D3D12_BLEND_OP_MAX)
+             desc->RenderTarget[i].SrcBlendAlpha = desc->RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ONE;
+ 
++         /* Intel's driver (a UHD 770 under WSL2) writes nothing for a
++          * dual-source blend whose alpha factors take SRC1 and that does not
++          * write alpha: alpha out of the write mask, or a format without
++          * alpha. Alpha factors that write nothing are ONE and ZERO there. */
++         if (pdev->desc.vendor_id == 0x8086 &&
++             !dzn_blend_writes_alpha(&in_blend->pAttachments[i],
++                                     i < color_count ? color_fmts[i] : VK_FORMAT_UNDEFINED)) {
++            desc->RenderTarget[i].SrcBlendAlpha = D3D12_BLEND_ONE;
++            desc->RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ZERO;
++            desc->RenderTarget[i].BlendOpAlpha = D3D12_BLEND_OP_ADD;
++         }
++
+          const VkPipelineColorBlendAttachmentState *att = &in_blend->pAttachments[i];
+          if (att->blendEnable) {
+             constant_alpha |= is_constant_alpha_blend_factor(att->srcColorBlendFactor) ||
+@@ -2637,8 +2734,6 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+    dzn_graphics_pipeline_translate_rast(device, pipeline, stream_desc, pCreateInfo);
+    dzn_graphics_pipeline_translate_ms(pipeline, stream_desc, pCreateInfo);
+    dzn_graphics_pipeline_translate_zsa(device, pipeline, stream_desc, pCreateInfo);
+-   dzn_graphics_pipeline_translate_blend(pipeline, stream_desc, pCreateInfo);
+-
+    unsigned view_mask = 0;
+    if (pass) {
+       const struct vk_subpass *subpass = &pass->subpasses[pCreateInfo->subpass];
+@@ -2716,6 +2811,9 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+       pipeline->multiview.native_view_instancing = true;
+    }
+ 
++   dzn_graphics_pipeline_translate_blend(pipeline, stream_desc, pCreateInfo,
++                                         color_fmts, color_count);
++
+    ret = dzn_graphics_pipeline_compile_shaders(device, pipeline, pcache,
+                                                layout, stream_desc,
+                                                attribs, vi_conversions,
+diff --git a/src/microsoft/vulkan/dzn_private.h b/src/microsoft/vulkan/dzn_private.h
+index 2fbcadb..03708db 100644
+--- a/src/microsoft/vulkan/dzn_private.h
++++ b/src/microsoft/vulkan/dzn_private.h
+@@ -1205,6 +1205,9 @@ struct dzn_graphics_pipeline {
+    struct {
+       bool dynamic_constants;
+       bool splat_constant_alpha;
++      /* The constant blend factors are dual-source ones, and the fragment
++       * shader writes the constants (dzn_nir_write_blend_constants_src1) */
++      bool constants_src1;
+       float constants[4];
+    } blend;
+ 

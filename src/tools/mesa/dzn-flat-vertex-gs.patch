@@ -1,0 +1,387 @@
+dzn: Take flat inputs from the last vertex without barycentrics
+
+dzn-provoking-vertex-last.patch reads flat inputs at the last vertex with
+attributeAtVertex, which needs barycentrics support in Direct3D 12. Intel's
+drivers under WSL2 have none (a UHD 770 and an Iris Plus 650), so there
+every flat varying and integer fragment output of an OpenGL ES app under
+ANGLE still came from the first vertex (dEQP-GLES3 fragment_out int/uint
+and rasterization.flatshading: 555 failures on a UHD 770).
+
+There, a pipeline with VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT, a vertex
+shader as its last geometry stage, a line or triangle topology and a
+fragment shader with flat inputs gets a geometry shader that passes each
+primitive through, the vertex order unchanged, with the flat outputs of
+its last vertex in every vertex. Which vertex that is depends on the
+topology, which ANGLE sets dynamically, so it comes from a new field of the
+runtime data, flat_vertex, set at each draw: the third vertex of a list
+triangle or of a triangle of Direct3D 12's own fans, the second of a line
+and of the (i + 1, i + 2, 0) triangles Dozen draws a fan as, and for a
+triangle strip the third of an even triangle and the second of an odd
+one, which Direct3D 12 hands over as (n, n + 2, n + 1). Topologies with
+adjacency, which OpenGL ES only draws through a geometry shader of its
+own, keep the first vertex, as does a fragment shader that reads the
+primitive ID.
+
+dEQP-VK.rasterization.provoking_vertex.draw: 28 of 36 pass on a UHD 770
+and an Iris Plus 650, up from 18; the 8 left are the adjacency topologies.
+
+diff --git a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+index 04145b4..23df49f 100644
+--- a/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
++++ b/src/microsoft/spirv_to_dxil/spirv_to_dxil.h
+@@ -131,6 +131,11 @@ struct dxil_spirv_vertex_runtime_data {
+     * primitives when emulating triangle point fill mode. Slope-scaled
+     * depth bias is currently unsupported. */
+    float depth_bias;
++   /* Dozen's emulation of the last provoking vertex without barycentrics:
++    * the vertex of the primitive a geometry shader receives that the flat
++    * inputs of the fragment shader come from, 1 or 2, or 3 for a triangle
++    * strip (2 for its even triangles, 1 for its odd ones). */
++   uint32_t flat_vertex;
+ };
+ 
+ enum dxil_spirv_yz_flip_mode {
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 59bec68..542fae4 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -4061,6 +4061,29 @@ dzn_cmd_buffer_rasterization_disabled(const struct dzn_cmd_buffer *cmdbuf,
+    }
+ }
+ 
++/* The vertex, in the primitive a geometry shader gets, of the last vertex of a
++ * Vulkan primitive, for the flat inputs of the fragment shader
++ * (dzn_nir_flat_vertex_gs). Direct3D 12's own triangle fans hand over
++ * (0, i + 1, i + 2); where it has none, Dozen draws a fan as a list of
++ * (i + 1, i + 2, 0) triangles. */
++static uint32_t
++dzn_flat_vertex(D3D12_PRIMITIVE_TOPOLOGY topology, bool triangle_fan)
++{
++   switch (topology) {
++   case D3D_PRIMITIVE_TOPOLOGY_LINELIST:
++   case D3D_PRIMITIVE_TOPOLOGY_LINESTRIP:
++      return 1;
++   case D3D_PRIMITIVE_TOPOLOGY_TRIANGLEFAN:
++      return 2;
++   case D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST:
++      return triangle_fan ? 1 : 2;
++   case D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP:
++      return DZN_FLAT_VERTEX_STRIP;
++   default:
++      return 0;
++   }
++}
++
+ static void
+ dzn_cmd_buffer_update_pipeline(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint)
+ {
+@@ -4118,15 +4141,20 @@ dzn_cmd_buffer_update_pipeline(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint
+          struct dzn_graphics_pipeline *gfx =
+             (struct dzn_graphics_pipeline *)pipeline;
+          D3D12_PRIMITIVE_TOPOLOGY topology = gfx->ia.topology;
++         bool triangle_fan = gfx->ia.triangle_fan;
+          if (gfx->dynamic & DZN_DYNAMIC_PRIMITIVE_TOPOLOGY) {
+             struct dzn_physical_device *pdev =
+                container_of(device->vk.physical, struct dzn_physical_device, vk);
+-            bool triangle_fan;
+             topology = dzn_translate_primitive_topology(pdev, cmdbuf->state.dyn.topology,
+                                                         gfx->ia.patch_control_points,
+                                                         &triangle_fan);
+          }
+          ID3D12GraphicsCommandList1_IASetPrimitiveTopology(cmdbuf->cmdlist, topology);
++         uint32_t flat_vertex = dzn_flat_vertex(topology, triangle_fan);
++         if (cmdbuf->state.sysvals.gfx.flat_vertex != flat_vertex) {
++            cmdbuf->state.sysvals.gfx.flat_vertex = flat_vertex;
++            cmdbuf->state.bindpoint[bindpoint].dirty |= DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
++         }
+          if (!dzn_graphics_pipeline_get_state(gfx, &cmdbuf->state.pipeline_variant)) {
+             vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+             return;
+diff --git a/src/microsoft/vulkan/dzn_nir.c b/src/microsoft/vulkan/dzn_nir.c
+index b803a9c..10e02d0 100644
+--- a/src/microsoft/vulkan/dzn_nir.c
++++ b/src/microsoft/vulkan/dzn_nir.c
+@@ -982,3 +982,170 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
+    NIR_PASS(_, nir, nir_lower_var_copies);
+    return b->shader;
+ }
++
++static nir_def *
++load_vertex_runtime_data(nir_builder *b, uint32_t register_space,
++                         uint32_t base_shader_register, unsigned offset)
++{
++   nir_address_format ubo_format = nir_address_format_32bit_index_offset;
++
++   nir_def *index = nir_vulkan_resource_index(
++      b, nir_address_format_num_components(ubo_format),
++      nir_address_format_bit_size(ubo_format),
++      nir_imm_int(b, 0),
++      .desc_set = register_space,
++      .binding = base_shader_register,
++      .desc_type = nir_descriptor_type_uniform_buffer);
++
++   nir_def *load_desc = nir_load_vulkan_descriptor(
++      b, nir_address_format_num_components(ubo_format),
++      nir_address_format_bit_size(ubo_format),
++      index, .desc_type = nir_descriptor_type_uniform_buffer);
++
++   return nir_load_ubo(
++      b, 1, 32,
++      nir_channel(b, load_desc, 0),
++      nir_imm_int(b, offset),
++      .align_mul = 256,
++      .align_offset = offset);
++}
++
++/* The varying slots of the flat inputs of a fragment shader, or 0 when it
++ * has none, or reads the primitive ID, which a geometry shader would have to
++ * write.
++ */
++static uint64_t
++fs_flat_input_slots(const nir_shader *fs)
++{
++   if (BITSET_TEST(fs->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID) ||
++       (fs->info.inputs_read & VARYING_BIT_PRIMITIVE_ID))
++      return 0;
++
++   uint64_t slots = 0;
++   nir_foreach_shader_in_variable(var, fs) {
++      int location = var->data.location;
++
++      if (location == VARYING_SLOT_PRIMITIVE_ID)
++         return 0;
++      if (var->data.interpolation != INTERP_MODE_FLAT ||
++          location < VARYING_SLOT_VAR0 || location >= 64)
++         continue;
++
++      unsigned count = MIN2(glsl_count_attribute_slots(var->type, false), 64 - location);
++      slots |= BITFIELD64_RANGE(location, count);
++   }
++
++   return slots;
++}
++
++/* A geometry shader that passes a primitive through with the flat outputs of
++ * its last vertex in every vertex, for VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT
++ * on GPUs without barycentrics: Direct3D 12 takes flat inputs from the first
++ * vertex. The vertex order, and so the rasterization and the facing, stay as
++ * they are. Which vertex is the last depends on the topology, which can be
++ * dynamic, so it comes from the runtime data (flat_vertex). NULL when the
++ * fragment shader has no flat inputs, or reads the primitive ID, or the vertex
++ * shader writes the layer or viewport.
++ */
++nir_shader *
++dzn_nir_flat_vertex_gs(const nir_shader *vs, const nir_shader *fs, bool lines,
++                       uint32_t runtime_data_register_space,
++                       uint32_t runtime_data_base_shader_register)
++{
++   if (vs->info.outputs_written & (VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT))
++      return NULL;
++
++   uint64_t flat_slots = fs_flat_input_slots(fs);
++   if (!flat_slots)
++      return NULL;
++
++   unsigned vertices = lines ? 2 : 3;
++   nir_builder builder =
++      nir_builder_init_simple_shader(MESA_SHADER_GEOMETRY,
++                                     dxil_get_base_nir_compiler_options(),
++                                     "flat_vertex_gs");
++   nir_builder *b = &builder;
++   nir_shader *nir = b->shader;
++
++   nir->info.inputs_read = nir->info.outputs_written = vs->info.outputs_written;
++   nir->info.gs.input_primitive = lines ? MESA_PRIM_LINES : MESA_PRIM_TRIANGLES;
++   nir->info.gs.output_primitive = lines ? MESA_PRIM_LINE_STRIP : MESA_PRIM_TRIANGLE_STRIP;
++   nir->info.gs.vertices_in = vertices;
++   nir->info.gs.vertices_out = vertices;
++   nir->info.gs.invocations = 1;
++   nir->info.gs.active_stream_mask = 1;
++   nir->info.clip_distance_array_size = vs->info.clip_distance_array_size;
++   nir->info.cull_distance_array_size = vs->info.cull_distance_array_size;
++   BITSET_SET(nir->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID);
++
++   unsigned num_vars = 0;
++   nir_variable *in[VARYING_SLOT_MAX];
++   nir_variable *out[VARYING_SLOT_MAX];
++   bool flat[VARYING_SLOT_MAX];
++
++   nir_foreach_shader_out_variable(var, vs) {
++      char tmp[100];
++      snprintf(tmp, ARRAY_SIZE(tmp), "in_%d", num_vars);
++      in[num_vars] = nir_variable_create(nir, nir_var_shader_in,
++                                         glsl_array_type(var->type, vertices, 0),
++                                         tmp);
++      in[num_vars]->data = var->data;
++      in[num_vars]->data.mode = nir_var_shader_in;
++
++      snprintf(tmp, ARRAY_SIZE(tmp), "out_%d", num_vars);
++      out[num_vars] = nir_variable_create(nir, nir_var_shader_out, var->type, tmp);
++      out[num_vars]->data = var->data;
++
++      int location = var->data.location;
++      flat[num_vars] = false;
++      if (location >= VARYING_SLOT_VAR0 && location < 64) {
++         unsigned count = MIN2(glsl_count_attribute_slots(var->type, false), 64 - location);
++         flat[num_vars] = (flat_slots & BITFIELD64_RANGE(location, count)) != 0;
++      }
++
++      num_vars++;
++   }
++
++   /* The runtime data CBV, for nir_to_dxil to declare */
++   const struct glsl_struct_field runtime_data_field = {
++      glsl_array_type(glsl_uint_type(),
++                      sizeof(struct dxil_spirv_vertex_runtime_data) / sizeof(unsigned),
++                      sizeof(unsigned)),
++      "arr"
++   };
++   nir_variable *runtime_data =
++      nir_variable_create(nir, nir_var_mem_ubo,
++                          glsl_struct_type(&runtime_data_field, 1, "runtime_data", false),
++                          "runtime_data");
++   runtime_data->data.descriptor_set = runtime_data_register_space;
++   runtime_data->data.binding = runtime_data_base_shader_register;
++   runtime_data->data.how_declared = nir_var_hidden;
++
++   /* The vertex the flat values come from: for a triangle strip, the third of
++    * an even triangle and the second of an odd one, which Direct3D 12 hands
++    * over as (n, n + 2, n + 1). */
++   nir_def *flat_vertex =
++      load_vertex_runtime_data(b, runtime_data_register_space,
++                               runtime_data_base_shader_register,
++                               offsetof(struct dxil_spirv_vertex_runtime_data, flat_vertex));
++   nir_def *strip_vertex =
++      nir_isub(b, nir_imm_int(b, 2), nir_iand_imm(b, nir_load_primitive_id(b), 1));
++   nir_def *flat_index =
++      nir_bcsel(b, nir_ieq_imm(b, flat_vertex, DZN_FLAT_VERTEX_STRIP),
++                strip_vertex, nir_umin(b, flat_vertex, nir_imm_int(b, vertices - 1)));
++
++   for (unsigned v = 0; v < vertices; v++) {
++      for (unsigned i = 0; i < num_vars; i++) {
++         nir_def *index = flat[i] ? flat_index : nir_imm_int(b, v);
++         copy_vars(b, nir_build_deref_var(b, out[i]),
++                   nir_build_deref_array(b, nir_build_deref_var(b, in[i]), index));
++      }
++      nir_emit_vertex(b, 0);
++   }
++   nir_end_primitive(b, 0);
++
++   nir_validate_shader(nir, "in dzn_nir_flat_vertex_gs");
++
++   NIR_PASS(_, nir, nir_lower_var_copies);
++   return nir;
++}
+diff --git a/src/microsoft/vulkan/dzn_nir.h b/src/microsoft/vulkan/dzn_nir.h
+index 3570388..f194f81 100644
+--- a/src/microsoft/vulkan/dzn_nir.h
++++ b/src/microsoft/vulkan/dzn_nir.h
+@@ -143,4 +143,11 @@ struct dzn_nir_point_gs_info {
+ nir_shader *
+ dzn_nir_polygon_point_mode_gs(const nir_shader *vs, struct dzn_nir_point_gs_info *info);
+ 
++#define DZN_FLAT_VERTEX_STRIP 3
++
++nir_shader *
++dzn_nir_flat_vertex_gs(const nir_shader *vs, const nir_shader *fs, bool lines,
++                       uint32_t runtime_data_register_space,
++                       uint32_t runtime_data_base_shader_register);
++
+ #endif
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+index 59942c8..bef9948 100644
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -1156,6 +1156,39 @@ dzn_graphics_pipeline_fs_provoking_vertex(const struct dzn_physical_device *pdev
+    }
+ }
+ 
++/* Without barycentrics, VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT takes a
++ * geometry shader that gives every vertex of a primitive the flat outputs of
++ * its last one (dzn_nir_flat_vertex_gs), for lines and triangles drawn by a
++ * vertex shader. The pipeline gets it only if its fragment shader has flat
++ * inputs. */
++static bool
++dzn_graphics_pipeline_wants_flat_vertex_gs(const struct dzn_physical_device *pdev,
++                                           const VkGraphicsPipelineCreateInfo *info,
++                                           mesa_shader_stage last_raster_stage)
++{
++   if (pdev->options3.BarycentricsSupported ||
++       last_raster_stage != MESA_SHADER_VERTEX ||
++       !info->pRasterizationState || !info->pInputAssemblyState)
++      return false;
++
++   const VkPipelineRasterizationProvokingVertexStateCreateInfoEXT *pv_info =
++      vk_find_struct_const(info->pRasterizationState->pNext,
++                           PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT);
++   if (!pv_info || pv_info->provokingVertexMode != VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT)
++      return false;
++
++   switch (info->pInputAssemblyState->topology) {
++   case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
++   case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
++   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
++   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
++   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
++      return true;
++   default:
++      return false;
++   }
++}
++
+ static VkResult
+ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+                                       struct dzn_graphics_pipeline *pipeline,
+@@ -1254,6 +1287,9 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+ 
+    uint8_t fs_provoking_vertex =
+       dzn_graphics_pipeline_fs_provoking_vertex(pdev, info, last_raster_stage);
++   bool flat_vertex_gs =
++      !pipeline->use_gs_for_polygon_mode_point && !lower_view_index &&
++      dzn_graphics_pipeline_wants_flat_vertex_gs(pdev, info, last_raster_stage);
+ 
+    if (cache) {
+       dzn_graphics_pipeline_hash_attribs(attribs, vi_conversions, attribs_hash);
+@@ -1270,6 +1306,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+       _mesa_blake3_update(&pipeline_hash_ctx, &lower_view_index, sizeof(lower_view_index));
+       _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->use_gs_for_polygon_mode_point, sizeof(pipeline->use_gs_for_polygon_mode_point));
+       _mesa_blake3_update(&pipeline_hash_ctx, &fs_provoking_vertex, sizeof(fs_provoking_vertex));
++      _mesa_blake3_update(&pipeline_hash_ctx, &flat_vertex_gs, sizeof(flat_vertex_gs));
+ 
+       u_foreach_bit(stage, active_stage_mask) {
+          const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroup_size_info =
+@@ -1357,6 +1394,34 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+          pipeline->needs_draw_sysvals = metadata.needs_draw_sysvals;
+    }
+ 
++   if (flat_vertex_gs && (active_stage_mask & BITFIELD_BIT(MESA_SHADER_FRAGMENT))) {
++      bool lines = to_prim_topology_type(info->pInputAssemblyState->topology) ==
++                   D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
++      nir_shader *gs =
++         dzn_nir_flat_vertex_gs(pipeline->templates.shaders[MESA_SHADER_VERTEX].nir,
++                                pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir,
++                                lines, DZN_REGISTER_SPACE_SYSVALS, 0);
++      if (gs) {
++         pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir = gs;
++         active_stage_mask |= BITFIELD_BIT(MESA_SHADER_GEOMETRY);
++
++         /* Hashes of its own, as the DXIL cache keys of the shaders linked
++          * with it come from them. */
++         static const char gs_kind[] = "dzn_flat_vertex_gs";
++         blake3_hasher gs_hash_ctx;
++         _mesa_blake3_init(&gs_hash_ctx);
++         _mesa_blake3_update(&gs_hash_ctx, gs_kind, sizeof(gs_kind));
++         _mesa_blake3_update(&gs_hash_ctx, stages[MESA_SHADER_VERTEX].spirv_hash, BLAKE3_KEY_LEN);
++         _mesa_blake3_final(&gs_hash_ctx, stages[MESA_SHADER_GEOMETRY].spirv_hash);
++         _mesa_blake3_init(&gs_hash_ctx);
++         _mesa_blake3_update(&gs_hash_ctx, gs_kind, sizeof(gs_kind));
++         _mesa_blake3_update(&gs_hash_ctx, stages[MESA_SHADER_VERTEX].nir_hash, BLAKE3_KEY_LEN);
++         _mesa_blake3_update(&gs_hash_ctx, stages[MESA_SHADER_FRAGMENT].nir_hash, BLAKE3_KEY_LEN);
++         _mesa_blake3_update(&gs_hash_ctx, &lines, sizeof(lines));
++         _mesa_blake3_final(&gs_hash_ctx, stages[MESA_SHADER_GEOMETRY].nir_hash);
++      }
++   }
++
+    if (pipeline->use_gs_for_polygon_mode_point) {
+       /* TODO: Cache; handle TES */
+       struct dzn_nir_point_gs_info gs_info = {

@@ -64,3 +64,5 @@ dzn-uav-2d-view-of-3d.patch
 dzn-copy-3d-slices.patch
 dzn-provoking-vertex-last.patch
 dzn-intel-8bit-copies.patch
+dzn-flat-vertex-gs.patch
+dzn-intel-blend.patch
