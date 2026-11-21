@@ -1,0 +1,26 @@
+Patch summary:
+On a host without the GPU ASTC decoder's output image (an Intel UHD 770
+under WSL2, whose Direct3D 12 driver cannot give a BC3 image the storage
+usage the decoder writes it through), ASTC data the CPU cannot decode, such
+as an image-to-image copy, was to stay undecoded, with a warning. The image
+was still marked for the GPU decoder, to print that warning once, and the
+next barrier that made it readable ran the decoder: its storage views of the
+BC3 image, which has no storage usage, were an invalid call, Direct3D 12
+removed the device, gfxstream aborted and the Android VM went down
+(dEQP-GLES31 copy_image of ASTC textures in the gfxstream mode). The image
+now needs the GPU decoder only where there is one.
+diff --git a/host/vulkan/emulated_textures/compressed_image_info.h b/host/vulkan/emulated_textures/compressed_image_info.h
+index c7ba98f8b..75e9048f3 100644
+--- a/host/vulkan/emulated_textures/compressed_image_info.h
++++ b/host/vulkan/emulated_textures/compressed_image_info.h
+@@ -139,7 +139,9 @@ class CompressedImageInfo {
+     // Whether ASTC data reached this image some way the CPU decoder did not handle, such as an
+     // image-to-image copy or a buffer the host cannot read. The image is then decoded on the GPU,
+     // from its compressed mipmaps, the next time it becomes readable.
+-    bool needsGpuAstcDecode() const { return mNeedsGpuAstcDecode; }
++    // Whether the GPU decoder is to decode the image: never on a host without it, where data the
++    // CPU could not decode stays undecoded (the output image has no storage usage to decode into).
++    bool needsGpuAstcDecode() const { return mNeedsGpuAstcDecode && mGpuDecodeAvailable; }
+     void requireGpuAstcDecode(const char* reason);
+ 
+     // Whether an image-to-image copy from src, another ASTC image the CPU decodes, can be done

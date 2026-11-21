@@ -1,0 +1,192 @@
+Patch summary:
+The GPU decoder writes a BC3 output image (ASTC decoded on Mesa's Dozen
+under WSL2, for data the CPU cannot decode, such as an image-to-image copy)
+through R32G32B32A32_UINT views of one mip level and all its array layers.
+Dozen turns such a view into a Direct3D 12 cast from a compressed to an
+uncompressed format, which Direct3D 12 allows only in a view of one mip
+level and one layer: for a cube map or array texture it removed the device,
+gfxstream aborted and the Android VM went down (dEQP-GLES31 copy_image of
+ASTC cube maps, RTX 4080 Laptop GPU under WSL2). An image whose output is
+BC3 now gets a descriptor set per mip level and layer, with one-layer views
+of the compressed mipmap and of the output image, and a dispatch per layer
+from layer 0 of those views. Other output formats keep a set per mip level.
+diff --git a/host/vulkan/emulated_textures/compressed_image_info.cpp b/host/vulkan/emulated_textures/compressed_image_info.cpp
+index 1ad227644..b4a9c342c 100644
+--- a/host/vulkan/emulated_textures/compressed_image_info.cpp
++++ b/host/vulkan/emulated_textures/compressed_image_info.cpp
+@@ -32,7 +32,7 @@ inline constexpr uint32_t ceil_div(uint32_t x, uint32_t y) { return (x + y - 1)
+ 
+ VkImageView createDefaultImageView(VulkanDispatch* vk, VkDevice device, VkImage image,
+                                    VkFormat format, VkImageType imageType, uint32_t mipLevel,
+-                                   uint32_t layerCount) {
++                                   uint32_t baseArrayLayer, uint32_t layerCount) {
+     VkImageViewCreateInfo imageViewInfo = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+         .image = image,
+@@ -44,7 +44,7 @@ VkImageView createDefaultImageView(VulkanDispatch* vk, VkDevice device, VkImage
+                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                 .baseMipLevel = mipLevel,
+                 .levelCount = 1,
+-                .baseArrayLayer = 0,
++                .baseArrayLayer = baseArrayLayer,
+                 .layerCount = layerCount,
+             },
+     };
+@@ -737,14 +737,24 @@ VkResult CompressedImageInfo::initializeDecompressionPipeline(VulkanDispatch* vk
+         return VK_ERROR_INITIALIZATION_FAILED;
+     }
+ 
++    // A BC3 output image is written through R32G32B32A32_UINT views. Mesa's Dozen turns those
++    // into Direct3D 12 casts from a compressed to an uncompressed format, which Direct3D 12
++    // allows only in views of one mip level and one array layer, and removes the device for
++    // others: the views of an array or cube image's output then cover one layer each, with a
++    // descriptor set and a dispatch per layer.
++    const bool compressedOutput = mOutputFormat == VK_FORMAT_BC3_UNORM_BLOCK ||
++                                  mOutputFormat == VK_FORMAT_BC3_SRGB_BLOCK;
++    mDecompLayerSets = compressedOutput && mExtent.depth == 1 ? mLayerCount : 1;
++    const uint32_t setCount = mMipLevels * mDecompLayerSets;
++
+     VkDescriptorPoolSize poolSize = {
+         .type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+-        .descriptorCount = 2 * mMipLevels,
++        .descriptorCount = 2 * setCount,
+     };
+     VkDescriptorPoolCreateInfo dsPoolInfo = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+         .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+-        .maxSets = mMipLevels,
++        .maxSets = setCount,
+         .poolSizeCount = 1,
+         .pPoolSizes = &poolSize,
+     };
+@@ -755,15 +765,15 @@ VkResult CompressedImageInfo::initializeDecompressionPipeline(VulkanDispatch* vk
+         return result;
+     }
+ 
+-    std::vector<VkDescriptorSetLayout> layouts(mMipLevels, mDecompPipeline->descriptorSetLayout());
++    std::vector<VkDescriptorSetLayout> layouts(setCount, mDecompPipeline->descriptorSetLayout());
+ 
+     VkDescriptorSetAllocateInfo dsInfo = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+         .descriptorPool = mDecompDescriptorPool,
+-        .descriptorSetCount = mMipLevels,
++        .descriptorSetCount = setCount,
+         .pSetLayouts = layouts.data(),
+     };
+-    mDecompDescriptorSets.resize(mMipLevels);
++    mDecompDescriptorSets.resize(setCount);
+     result = vk->vkAllocateDescriptorSets(device, &dsInfo, mDecompDescriptorSets.data());
+     if (result != VK_SUCCESS) {
+         GFXSTREAM_ERROR("GPU decompression error. vkAllocateDescriptorSets failed: %d", result);
+@@ -771,8 +781,8 @@ VkResult CompressedImageInfo::initializeDecompressionPipeline(VulkanDispatch* vk
+     }
+ 
+     VkFormat shaderFormat = getShaderFormat(mOutputFormat);
+-    mCompressedMipmapsImageViews.resize(mMipLevels);
+-    mOutputImageViews.resize(mMipLevels);
++    mCompressedMipmapsImageViews.resize(setCount);
++    mOutputImageViews.resize(setCount);
+ 
+     VkDescriptorImageInfo compressedMipmapsDescriptorImageInfo = {.imageLayout =
+                                                                       VK_IMAGE_LAYOUT_GENERAL};
+@@ -793,17 +803,21 @@ VkResult CompressedImageInfo::initializeDecompressionPipeline(VulkanDispatch* vk
+             .pImageInfo = &mDecompDescriptorImageInfo,
+         }};
+ 
++    const uint32_t viewLayers = mDecompLayerSets > 1 ? 1 : mLayerCount;
+     for (uint32_t i = 0; i < mMipLevels; i++) {
+-        mCompressedMipmapsImageViews[i] =
+-            createDefaultImageView(vk, device, mCompressedMipmaps[i], mCompressedMipmapsFormat,
+-                                   mImageType, 0, mLayerCount);
+-        mOutputImageViews[i] = createDefaultImageView(vk, device, mOutputImage, shaderFormat,
+-                                                      mImageType, i, mLayerCount);
+-        compressedMipmapsDescriptorImageInfo.imageView = mCompressedMipmapsImageViews[i];
+-        mDecompDescriptorImageInfo.imageView = mOutputImageViews[i];
+-        writeDescriptorSets[0].dstSet = mDecompDescriptorSets[i];
+-        writeDescriptorSets[1].dstSet = mDecompDescriptorSets[i];
+-        vk->vkUpdateDescriptorSets(device, 2, writeDescriptorSets, 0, nullptr);
++        for (uint32_t l = 0; l < mDecompLayerSets; l++) {
++            const uint32_t s = i * mDecompLayerSets + l;
++            mCompressedMipmapsImageViews[s] =
++                createDefaultImageView(vk, device, mCompressedMipmaps[i], mCompressedMipmapsFormat,
++                                       mImageType, 0, l, viewLayers);
++            mOutputImageViews[s] = createDefaultImageView(vk, device, mOutputImage, shaderFormat,
++                                                          mImageType, i, l, viewLayers);
++            compressedMipmapsDescriptorImageInfo.imageView = mCompressedMipmapsImageViews[s];
++            mDecompDescriptorImageInfo.imageView = mOutputImageViews[s];
++            writeDescriptorSets[0].dstSet = mDecompDescriptorSets[s];
++            writeDescriptorSets[1].dstSet = mDecompDescriptorSets[s];
++            vk->vkUpdateDescriptorSets(device, 2, writeDescriptorSets, 0, nullptr);
++        }
+     }
+ 
+     mDecompPipelineInitialized = true;
+@@ -814,12 +828,16 @@ void CompressedImageInfo::decompress(VulkanDispatch* vk, VkCommandBuffer command
+                                      const VkImageSubresourceRange& range) {
+     vk->vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                           mDecompPipeline->pipeline());
+-    uint32_t dispatchZ = mExtent.depth == 1 ? range.layerCount : mExtent.depth;
++    // With a descriptor set per layer, each dispatch decodes one layer, from layer 0 of its
++    // one-layer views.
++    const bool perLayer = mDecompLayerSets > 1;
++    uint32_t dispatchZ = perLayer ? 1 : mExtent.depth == 1 ? range.layerCount : mExtent.depth;
++    const uint32_t baseLayer = !perLayer && mExtent.depth == 1 ? range.baseArrayLayer : 0;
+     bool perPixel = false;  // Whether the shader operates per compressed block or per pixel
+     if (isEtc2()) {
+         const Etc2PushConstant pushConstant = {
+             .compFormat = (uint32_t)mCompressedFormat,
+-            .baseLayer = mExtent.depth == 1 ? range.baseArrayLayer : 0};
++            .baseLayer = baseLayer};
+         vk->vkCmdPushConstants(commandBuffer, mDecompPipeline->pipelineLayout(),
+                                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstant), &pushConstant);
+     } else if (isAstc()) {
+@@ -840,7 +858,7 @@ void CompressedImageInfo::decompress(VulkanDispatch* vk, VkCommandBuffer command
+         }
+         const AstcPushConstant pushConstant = {
+             .blockSize = {mBlock.width, mBlock.height},
+-            .baseLayer = mExtent.depth == 1 ? range.baseArrayLayer : 0,
++            .baseLayer = baseLayer,
+             .smallBlock = smallBlock};
+         vk->vkCmdPushConstants(commandBuffer, mDecompPipeline->pipelineLayout(),
+                                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstant), &pushConstant);
+@@ -849,14 +867,19 @@ void CompressedImageInfo::decompress(VulkanDispatch* vk, VkCommandBuffer command
+     }
+     const uint32_t endMipLevel = std::min<uint32_t>(
+         range.baseMipLevel + range.levelCount,
+-        static_cast<uint32_t>(mDecompDescriptorSets.size()));
++        static_cast<uint32_t>(mDecompDescriptorSets.size() / mDecompLayerSets));
++    const uint32_t firstSetLayer = perLayer ? range.baseArrayLayer : 0;
++    const uint32_t endSetLayer = perLayer ? range.baseArrayLayer + range.layerCount : 1;
+     for (uint32_t i = range.baseMipLevel; i < endMipLevel; i++) {
+-        vk->vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+-                                    mDecompPipeline->pipelineLayout(), 0, 1,
+-                                    mDecompDescriptorSets.data() + i, 0, nullptr);
+         VkExtent3D extent = perPixel ? mipmapExtent(i) : compressedMipmapExtent(i);
+-        vk->vkCmdDispatch(commandBuffer, ceil_div(extent.width, 8), ceil_div(extent.height, 8),
+-                          dispatchZ);
++        for (uint32_t l = firstSetLayer; l < endSetLayer; l++) {
++            vk->vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
++                                        mDecompPipeline->pipelineLayout(), 0, 1,
++                                        mDecompDescriptorSets.data() + i * mDecompLayerSets + l,
++                                        0, nullptr);
++            vk->vkCmdDispatch(commandBuffer, ceil_div(extent.width, 8),
++                              ceil_div(extent.height, 8), dispatchZ);
++        }
+     }
+ }
+ 
+diff --git a/host/vulkan/emulated_textures/compressed_image_info.h b/host/vulkan/emulated_textures/compressed_image_info.h
+index b3d6a436a..c7ba98f8b 100644
+--- a/host/vulkan/emulated_textures/compressed_image_info.h
++++ b/host/vulkan/emulated_textures/compressed_image_info.h
+@@ -209,7 +209,10 @@ class CompressedImageInfo {
+     // Vulkan resources used by the decompression pipeline
+     GpuDecompressionPipelineManager* mPipelineManager = nullptr;
+     GpuDecompressionPipeline* mDecompPipeline = nullptr;
++    // One per mip level, or with a BC3 output image one per mip level and array layer
++    // (mDecompLayerSets of them per level), with the views below.
+     std::vector<VkDescriptorSet> mDecompDescriptorSets;
++    uint32_t mDecompLayerSets = 1;
+     VkDescriptorPool mDecompDescriptorPool = VK_NULL_HANDLE;
+     std::vector<VkImageView> mCompressedMipmapsImageViews;
+     std::vector<VkImageView> mOutputImageViews;

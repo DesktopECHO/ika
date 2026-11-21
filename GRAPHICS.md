@@ -468,6 +468,17 @@ decoding:on". The CPU decoder is built for AVX2 (with F16C, POPCNT and
 SSE4.1), which the processors of hosts that run Dozen have; on an x86-64 CPU
 without them, gfxstream decodes on the GPU and logs "ASTC CPU decoding is
 unavailable".
+
+gfxstream's GPU decoder writes those textures as BC3 one array layer at a
+time
+([PATCH.gfxstream.decompression-layer-views.patch](src/base/cvd/build_external/gfxstream/PATCH.gfxstream.decompression-layer-views.patch)):
+Direct3D 12 views a compressed texture as an uncompressed one only a layer
+at a time, and removed the device when an app copied into an ASTC cube map.
+Where the Direct3D 12 driver has no relaxed format casting (an Intel UHD
+770), there is no GPU decoder, and the data the CPU cannot decode stays
+undecoded, with a "stays undecoded" warning in crosvm's log
+([PATCH.gfxstream.astc-undecoded-no-gpu-decoder.patch](src/base/cvd/build_external/gfxstream/PATCH.gfxstream.astc-undecoded-no-gpu-decoder.patch));
+before, gfxstream ran the decoder anyway, and Direct3D 12 removed the device.
 - The `libd3d12.so` shim ([src/tools/wsl/d3d12_shim.c](src/tools/wsl/d3d12_shim.c))
   first in `LD_LIBRARY_PATH`. It gives crosvm's Vulkan instances D3D12 devices
   from a pool of a few, which they share. WSL allows about ten D3D12 devices

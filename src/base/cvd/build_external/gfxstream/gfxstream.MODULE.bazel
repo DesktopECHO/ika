@@ -128,5 +128,9 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.boxed-handle-table.patch",
         # A bind of descriptor sets records them only for who reads them.
         "@//build_external/gfxstream:PATCH.gfxstream.bind-descriptor-sets-record.patch",
+        # The GPU texture decoder writes a BC3 image one array layer at a time.
+        "@//build_external/gfxstream:PATCH.gfxstream.decompression-layer-views.patch",
+        # ASTC data the CPU cannot decode stays undecoded where there is no GPU decoder.
+        "@//build_external/gfxstream:PATCH.gfxstream.astc-undecoded-no-gpu-decoder.patch",
     ],
 )
