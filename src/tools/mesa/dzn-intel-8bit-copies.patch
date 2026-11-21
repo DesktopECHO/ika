@@ -1,0 +1,38 @@
+dzn: Copy 8-bit textures through a buffer on Intel
+
+Intel's Direct3D 12 driver copies textures of 8-bit formats with
+CopyTextureRegion into the wrong texels: a UHD 770 under WSL2 failed every
+dEQP-GLES31 copy_image.non_compressed case of the R8 formats (312), and
+passed the others. Dawn works around the same bug for formats under 4 bytes
+on older Intel GPUs (Gen9 and Gen9.5) by copying through a buffer.
+
+On Intel, a copy between single-sampled color images of an 8-bit format
+goes through Dozen's staging buffer, as copies between incompatible formats
+already do.
+
+Generated-by: LLM
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -5178,6 +5178,20 @@
+             requires_temp_res = true;
+             break;
+          }
++
++         /* Intel's Direct3D 12 driver copies textures of 8-bit formats into
++          * the wrong texels (Dawn works around the same bug for formats under
++          * 4 bytes on older Intel GPUs); a UHD 770 under WSL2 failed every
++          * dEQP-GLES31 copy_image of R8 formats. Copy through a buffer.
++          */
++         if (pdev->desc.vendor_id == 0x8086 && aspect == VK_IMAGE_ASPECT_COLOR_BIT &&
++             src->vk.samples == 1 &&
++             src->vk.tiling != VK_IMAGE_TILING_LINEAR &&
++             dst->vk.tiling != VK_IMAGE_TILING_LINEAR &&
++             util_format_get_blocksize(vk_format_to_pipe_format(src->vk.format)) == 1) {
++            requires_temp_res = true;
++            break;
++         }
+       }
+    }
+ 

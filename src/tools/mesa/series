@@ -61,3 +61,6 @@ dzn-gs-mediump32.patch
 dzn-intel-no-view-instancing.patch
 dzn-block-texel-view-layers.patch
 dzn-uav-2d-view-of-3d.patch
+dzn-copy-3d-slices.patch
+dzn-provoking-vertex-last.patch
+dzn-intel-8bit-copies.patch

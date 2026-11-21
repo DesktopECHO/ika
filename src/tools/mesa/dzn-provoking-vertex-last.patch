@@ -1,0 +1,171 @@
+dzn: Take flat inputs from the last vertex when a pipeline asks for it
+
+Dozen advertises VK_EXT_provoking_vertex's provokingVertexLast and ignored
+the mode: Direct3D 12 takes a flat input from the first vertex of a
+primitive. ANGLE asks for the last vertex, as OpenGL ES uses it, so under
+Venus every flat varying and integer fragment output of an Android app came
+from the wrong vertex (dEQP-GLES3 fragment_out int/uint and
+rasterization.flatshading: 558 failures on an RTX 4080 Laptop GPU under
+WSL2, 8 with this change).
+
+When a pipeline without geometry or tessellation stages uses
+VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT and the device supports
+barycentrics, its fragment shader reads flat inputs, of any type, at the
+last vertex with attributeAtVertex, as Mesa's Direct3D 12 OpenGL driver does
+for float inputs: vertex 2 of a triangle, 1 of a line, and 1 of the
+(i + 1, i + 2, 0) triangles Dozen draws a fan as. Triangle strips keep the
+first vertex, as Direct3D 12 numbers the vertices of their odd triangles
+from the provoking one. The vertex is part of the shader cache keys.
+nir_to_dxil gets an option to read integer inputs that way too; Mesa's
+OpenGL driver does not set it.
+
+Generated-by: LLM
+
+diff --git a/src/microsoft/compiler/nir_to_dxil.c b/src/microsoft/compiler/nir_to_dxil.c
+--- a/src/microsoft/compiler/nir_to_dxil.c
++++ b/src/microsoft/compiler/nir_to_dxil.c
+@@ -3737,7 +3737,8 @@
+    if (ctx->mod.shader_kind == DXIL_PIXEL_SHADER &&
+       ctx->opts->interpolate_at_vertex &&
+       ctx->opts->provoking_vertex != 0 &&
+-      (nir_intrinsic_dest_type(intr) & nir_type_float)) {
++      (ctx->opts->interpolate_at_vertex_all_types ||
++       (nir_intrinsic_dest_type(intr) & nir_type_float))) {
+       nir_variable *var = nir_find_variable_with_driver_location(ctx->shader, nir_var_shader_in, nir_intrinsic_base(intr));
+ 
+       attr_at_vertex = var && var->data.interpolation == INTERP_MODE_FLAT;
+diff --git a/src/microsoft/compiler/nir_to_dxil.h b/src/microsoft/compiler/nir_to_dxil.h
+--- a/src/microsoft/compiler/nir_to_dxil.h
++++ b/src/microsoft/compiler/nir_to_dxil.h
+@@ -82,6 +82,8 @@
+    bool last_ubo_is_not_arrayed;
+    bool advanced_texture_ops;
+    unsigned provoking_vertex;
++   /* Also read integer flat inputs at the provoking vertex (interpolate_at_vertex) */
++   bool interpolate_at_vertex_all_types;
+    unsigned num_kernel_globals;
+    unsigned input_clip_size;
+    enum dxil_environment environment;
+diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
+--- a/src/microsoft/vulkan/dzn_pipeline.c
++++ b/src/microsoft/vulkan/dzn_pipeline.c
+@@ -755,6 +755,7 @@
+ dzn_pipeline_compile_shader(struct dzn_device *device,
+                             nir_shader *nir,
+                             uint32_t input_clip_size,
++                            uint8_t provoking_vertex,
+                             D3D12_SHADER_BYTECODE *slot)
+ {
+    struct dzn_instance *instance =
+@@ -768,6 +769,9 @@
+       .shader_model_max = dzn_get_shader_model(pdev),
+       .input_clip_size = input_clip_size,
+       .advanced_texture_ops = pdev->options14.AdvancedTextureOpsSupported,
++      .interpolate_at_vertex = provoking_vertex != 0,
++      .provoking_vertex = provoking_vertex,
++      .interpolate_at_vertex_all_types = true,
+ #ifdef _WIN32
+       .validator_version_max = dxil_get_validator_version(instance->dxil_validator),
+ #endif
+@@ -1103,6 +1107,55 @@
+    _mesa_blake3_final(&ctx, result);
+ }
+ 
++/* The vertex (0 to 2) of a primitive the fragment shader reads flat inputs
++ * from, or 0 for Direct3D 12's own, the first. Vulkan's
++ * VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT, which ANGLE asks for as OpenGL ES
++ * takes flat values from the last vertex, was advertised and ignored: every
++ * flat varying and integer output came from the wrong vertex. The fragment
++ * shader now reads them with attributeAtVertex at the last vertex, which needs
++ * barycentrics support and the primitive as the vertex shader emits it. Dozen
++ * draws a triangle fan as a list of (i + 1, i + 2, 0) triangles, whose last
++ * Vulkan vertex is their second. Direct3D 12 reorders the odd triangles of a
++ * strip, so strips keep the first vertex, as do pipelines with a geometry or
++ * tessellation stage.
++ */
++static uint8_t
++dzn_graphics_pipeline_fs_provoking_vertex(const struct dzn_physical_device *pdev,
++                                          const VkGraphicsPipelineCreateInfo *info,
++                                          mesa_shader_stage last_raster_stage)
++{
++   if (!pdev->options3.BarycentricsSupported ||
++       last_raster_stage != MESA_SHADER_VERTEX ||
++       !info->pRasterizationState || !info->pInputAssemblyState)
++      return 0;
++
++   const VkPipelineRasterizationProvokingVertexStateCreateInfoEXT *pv_info =
++      vk_find_struct_const(info->pRasterizationState->pNext,
++                           PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT);
++   if (!pv_info || pv_info->provokingVertexMode != VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT)
++      return 0;
++
++   bool dynamic_topology = false;
++   for (uint32_t i = 0; info->pDynamicState && i < info->pDynamicState->dynamicStateCount; i++) {
++      if (info->pDynamicState->pDynamicStates[i] == VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY)
++         dynamic_topology = true;
++   }
++
++   VkPrimitiveTopology topology = info->pInputAssemblyState->topology;
++   switch (to_prim_topology_type(topology)) {
++   case D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE:
++      return 1;
++   case D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE:
++      if (dynamic_topology)
++         return 2;
++      if (topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)
++         return 1;
++      return topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ? 0 : 2;
++   default:
++      return 0;
++   }
++}
++
+ static VkResult
+ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+                                       struct dzn_graphics_pipeline *pipeline,
+@@ -1199,6 +1252,9 @@
+       info->pMultisampleState &&
+       info->pMultisampleState->sampleShadingEnable;
+ 
++   uint8_t fs_provoking_vertex =
++      dzn_graphics_pipeline_fs_provoking_vertex(pdev, info, last_raster_stage);
++
+    if (cache) {
+       dzn_graphics_pipeline_hash_attribs(attribs, vi_conversions, attribs_hash);
+ 
+@@ -1213,6 +1269,7 @@
+       _mesa_blake3_update(&pipeline_hash_ctx, &force_sample_rate_shading, sizeof(force_sample_rate_shading));
+       _mesa_blake3_update(&pipeline_hash_ctx, &lower_view_index, sizeof(lower_view_index));
+       _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->use_gs_for_polygon_mode_point, sizeof(pipeline->use_gs_for_polygon_mode_point));
++      _mesa_blake3_update(&pipeline_hash_ctx, &fs_provoking_vertex, sizeof(fs_provoking_vertex));
+ 
+       u_foreach_bit(stage, active_stage_mask) {
+          const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroup_size_info =
+@@ -1263,6 +1320,8 @@
+          }
+          if (stage == MESA_SHADER_VERTEX)
+             _mesa_blake3_update(&nir_hash_ctx, attribs_hash, sizeof(attribs_hash));
++         if (stage == MESA_SHADER_FRAGMENT)
++            _mesa_blake3_update(&nir_hash_ctx, &fs_provoking_vertex, sizeof(fs_provoking_vertex));
+          if (stage == last_raster_stage) {
+             _mesa_blake3_update(&nir_hash_ctx, &yz_flip_mode, sizeof(yz_flip_mode));
+             _mesa_blake3_update(&nir_hash_ctx, &y_flip_mask, sizeof(y_flip_mask));
+@@ -1478,7 +1537,8 @@
+       D3D12_SHADER_BYTECODE *slot =
+          dzn_pipeline_get_gfx_shader_slot(out, stage);
+ 
+-      ret = dzn_pipeline_compile_shader(device, pipeline->templates.shaders[stage].nir, prev_stage_output_clip_size, slot);
++      ret = dzn_pipeline_compile_shader(device, pipeline->templates.shaders[stage].nir, prev_stage_output_clip_size,
++                                        stage == MESA_SHADER_FRAGMENT ? fs_provoking_vertex : 0, slot);
+       if (ret != VK_SUCCESS)
+          return ret;
+ 
+@@ -3308,7 +3368,7 @@
+       }
+    }
+ 
+-   ret = dzn_pipeline_compile_shader(device, nir, 0, shader);
++   ret = dzn_pipeline_compile_shader(device, nir, 0, 0, shader);
+    if (ret != VK_SUCCESS)
+       goto out;
+ 

@@ -633,6 +633,27 @@ view of that slice, as Dozen does for render targets
 Direct3D 12 has no 2D view of a 3D texture and removed the device for one,
 which took down the VM on an RTX 4080 and a UHD 770.
 
+Ika's Dozen takes a flat input (a flat-shaded colour, any integer varying)
+from the last vertex of a triangle or line when the pipeline asks for it,
+as ANGLE does for OpenGL ES
+([dzn-provoking-vertex-last.patch](src/tools/mesa/dzn-provoking-vertex-last.patch)).
+Dozen advertised that mode but took the first vertex, as Direct3D 12 does,
+so such values came from the wrong vertex. It needs a GPU with barycentrics
+support in Direct3D 12; triangle strips still take the first vertex.
+
+Ika's Dozen copies between a 3D texture and a 2D or array one of a
+different but compatible format a slice at a time
+([dzn-copy-3d-slices.patch](src/tools/mesa/dzn-copy-3d-slices.patch)),
+and on Intel GPUs copies textures of 8-bit formats through a buffer, as
+Intel's driver copies them into the wrong texels with Direct3D 12's texture
+copy
+([dzn-intel-8bit-copies.patch](src/tools/mesa/dzn-intel-8bit-copies.patch)).
+
+Intel's Direct3D 12 driver under WSL2 (a UHD 770) has two bugs Ika's Dozen
+does not work around: it ignores the blend constant (`glBlendColor`), and it
+does not clamp a shadow lookup's reference value to [0, 1] for 16- and
+24-bit depth textures.
+
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
 otherwise falls back to llvmpipe on WSL2, drawing every frame of the window

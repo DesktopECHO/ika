@@ -1,0 +1,28 @@
+dzn: Copy a 3D image to or from a 2D one a slice per layer when the formats differ
+
+vkCmdCopyImage between a 3D image and a 2D or array image copies each slice
+to or from its own layer. When the two formats are not copy-compatible in
+Direct3D 12 (R16_SINT and R8G8_UNORM, say), Dozen copies through a staging
+buffer: it copied one slice into the buffer, then copied the buffer's
+footprint into the layer with the whole region's depth, so a copy into one
+array layer covered every slice. Direct3D 12 refused it, and the layers kept
+their old contents. In dEQP-GLES31 copy_image.non_compressed, such a case
+failed, and so did the cases after it in the same process:
+about 5,300 cases on an RTX 4080 Laptop GPU and 5,600 on a UHD 770 under
+WSL2. With one slice per copy they pass (all 5,976 on the RTX 4080).
+
+Generated-by: LLM
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -3491,7 +3491,8 @@
+       tmp_loc->PlacedFootprint.Footprint.Depth =
+          DIV_ROUND_UP(depth, src_blkd) * dst_blkd;
+    } else {
+-      tmp_loc->PlacedFootprint.Footprint.Depth = region.extent.depth;
++      /* One slice per layer when a 3D image is copied to or from a 2D one */
++      tmp_loc->PlacedFootprint.Footprint.Depth = depth;
+    }
+ 
+    D3D12_BOX tmp_box = {
