@@ -1,0 +1,99 @@
+dzn: Clear depth-stencil textures before copies write them on Intel
+
+Intel's Direct3D 12 drivers do not keep a depth-stencil texture's depth
+metadata up to date when CopyTextureRegion writes the texture: a shader
+sampling it afterwards reads stale values in bands of rows. dEQP-GLES3
+texture.shadow, whose depth textures ANGLE uploads with
+vkCmdCopyBufferToImage, failed 131 of 432 cases on a UHD 770 under WSL2,
+and a different set on each run (the 2d.nearest.less_or_equal_depth24_stencil8
+case 5 runs in 8), as did the Iris Plus 650 of a Kaby Lake; 32-bit float
+depth textures and the RTX 4080 of the same laptop never failed. Dawn works
+around the same bug on Intel's Gen9, Gen12 and Xe GPUs by clearing
+depth-stencil textures before a copy writes them.
+
+On Intel, a copy from a buffer or an image to a single-sampled
+depth-stencil texture clears the depth or stencil plane it writes first;
+such copies always write whole planes. Multisampled textures are left out:
+on the Iris Plus 650 a copy into a cleared one kept the cleared values
+(dEQP-VK depth_stencil_msaa_copy).
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index cc3d7f9..74f6868 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -2967,6 +2967,42 @@ dzn_cmd_buffer_clear_zs(struct dzn_cmd_buffer *cmdbuf,
+    }
+ }
+ 
++/* Intel's Direct3D 12 drivers do not keep a depth-stencil texture's depth
++ * metadata up to date when a copy writes the texture: a shader sampling it
++ * afterwards read stale values in bands of rows, and dEQP-GLES3 shadow
++ * lookups on a UHD 770 and an Iris Plus 650 under WSL2 failed now and then.
++ * Dawn works around the same bug on Intel GPUs by clearing such textures
++ * before a copy writes them. Clear the plane a copy is about to write whole.
++ * Not multisampled textures: on an Iris Plus 650 a copy into a cleared one
++ * kept the cleared values.
++ */
++static void
++dzn_cmd_buffer_clear_ds_copy_dst(struct dzn_cmd_buffer *cmdbuf,
++                                 const struct dzn_image *image,
++                                 VkImageLayout layout,
++                                 VkImageAspectFlagBits aspect,
++                                 uint32_t mip, uint32_t layer)
++{
++   struct dzn_physical_device *pdev =
++      container_of(cmdbuf->vk.base.device->physical, struct dzn_physical_device, vk);
++
++   if (pdev->desc.vendor_id != 0x8086 ||
++       cmdbuf->type != D3D12_COMMAND_LIST_TYPE_DIRECT ||
++       image->vk.samples > 1 ||
++       !(image->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
++      return;
++
++   const VkClearDepthStencilValue zs = { 0 };
++   const VkImageSubresourceRange range = {
++      .aspectMask = aspect,
++      .baseMipLevel = mip,
++      .levelCount = 1,
++      .baseArrayLayer = layer,
++      .layerCount = 1,
++   };
++   dzn_cmd_buffer_clear_zs(cmdbuf, image, layout, &zs, 1, &range);
++}
++
+ /* D3D12 copies depth-stencil resources only as whole subresources. Read the
+  * whole plane into a temporary buffer, build a second one with the new rows
+  * in it, then copy that one back to the image.
+@@ -3099,6 +3135,8 @@ dzn_cmd_buffer_copy_partial_ds_buf2img(struct dzn_cmd_buffer *cmdbuf,
+                                                DZN_QUEUE_TRANSITION_FLUSH);
+    }
+ 
++   dzn_cmd_buffer_clear_ds_copy_dst(cmdbuf, dst_image, layout, aspect, mip,
++                                    region->imageSubresource.baseArrayLayer + l);
+    ID3D12GraphicsCommandList1_CopyTextureRegion(cmdbuf->cmdlist, dst_img_loc, 0, 0, 0,
+                                                 &new_loc, NULL);
+ }
+@@ -3144,6 +3182,9 @@ dzn_cmd_buffer_copy_buf2img_region(struct dzn_cmd_buffer *cmdbuf,
+       return;
+    }
+ 
++   dzn_cmd_buffer_clear_ds_copy_dst(cmdbuf, dst_image, info->dstImageLayout, aspect, mip,
++                                    region.imageSubresource.baseArrayLayer + l);
++
+    /* Footprint slices are RowPitch * Height apart, so a larger
+     * bufferImageHeight needs the line-by-line copy.
+     */
+@@ -5359,8 +5400,12 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
+       const VkImageCopy2 *region = &info->pRegions[i];
+ 
+       dzn_foreach_aspect(aspect, region->srcSubresource.aspectMask) {
+-         for (uint32_t l = 0; l < MAX2(region->srcSubresource.layerCount, region->dstSubresource.layerCount); l++)
++         for (uint32_t l = 0; l < MAX2(region->srcSubresource.layerCount, region->dstSubresource.layerCount); l++) {
++            dzn_cmd_buffer_clear_ds_copy_dst(cmdbuf, dst, info->dstImageLayout, aspect,
++                                             region->dstSubresource.mipLevel,
++                                             region->dstSubresource.baseArrayLayer + l);
+             dzn_cmd_buffer_copy_img_chunk(cmdbuf, info, &tmp_desc, &tmp_loc, i, aspect, l);
++         }
+       }
+    }
+ }

@@ -662,11 +662,12 @@ masked out, or a format without alpha). On Intel GPUs Ika's Dozen hands a
 blend with the constant to the GPU as a dual-source blend, the fragment
 shader writing the constant as its second output, and gives a blend that
 writes no alpha plain alpha factors
-([dzn-intel-blend.patch](src/tools/mesa/dzn-intel-blend.patch)). The same
-driver does not clamp a shadow lookup's reference value to [0, 1] for 16-
-and 24-bit depth textures, which Ika's Dozen does not work around: a shader
-cannot tell those from 32-bit float depth textures, whose reference must
-not be clamped.
+([dzn-intel-blend.patch](src/tools/mesa/dzn-intel-blend.patch)).
+Intel's drivers also leave a depth texture partly stale for the GPU's own
+reads after a copy writes it, so shadow maps that an app uploaded came out
+with bands of wrong rows. On Intel GPUs Ika's Dozen clears the depth or
+stencil plane of a texture before a copy writes it
+([dzn-intel-depth-copies.patch](src/tools/mesa/dzn-intel-depth-copies.patch)).
 
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL
