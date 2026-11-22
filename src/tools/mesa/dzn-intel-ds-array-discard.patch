@@ -1,0 +1,122 @@
+dzn: Do not discard depth-stencil arrays of two planes on Intel
+
+A barrier that takes a texture out of VK_IMAGE_LAYOUT_UNDEFINED discards
+its contents (D3D12_TEXTURE_BARRIER_FLAG_DISCARD, or DiscardResource
+without enhanced barriers). Intel's Direct3D 12 driver for a UHD 770
+under WSL2 (32.0.101.7092) hangs the GPU queue for good, with no TDR,
+when such a barrier discards a depth-stencil texture of two planes (D24S8
+and D32S8, and X8_D24, which D3D12 stores as D24S8) with several array
+layers. dEQP-VK image_to_image array_to_array_whole_mipmap_d24_unorm_s8_uint
+and texture.shadow 2d_array and cube of D24S8 and D32S8 waited forever
+for their first upload; the process could then never exit, so every GPU
+process in WSL, and wsl.exe itself, hung until Windows was restarted.
+With DZN_DEBUG=nodiscard they passed; discarding only the barrier's plane
+was not the cause, as a barrier that names both planes hung as well.
+Single-layer textures and one-plane depth arrays (D16, D32) are fine.
+
+On Intel, never discard a two-plane depth-stencil texture of more than
+one array layer. The driver then keeps its contents, at the cost of
+whatever a discard would have saved it.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 7af3aa3..741f257 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -195,6 +195,43 @@ dzn_image_aspects(const struct dzn_image *image, VkImageAspectFlags mask)
+    return mask & vk_format_aspects(image->vk.format);
+ }
+ 
++/* Whether a barrier that takes image out of UNDEFINED may discard it.
++ *
++ * Intel's Direct3D 12 driver for a UHD 770 under WSL2 hangs the GPU queue
++ * for good, with no TDR, when a barrier discards a depth-stencil texture of
++ * two planes (D24S8 and D32S8, and X8_D24, which D3D12 stores as D24S8)
++ * that has several array layers: dEQP-VK copies into such 2D arrays and
++ * cubes and shadow lookups from them waited forever for their first upload,
++ * the process could then never exit, and every GPU process in WSL hung with
++ * it until Windows restarted. Single-layer ones and one-plane depth arrays
++ * are fine. Not discarding only costs the driver a decompression.
++ */
++static bool
++dzn_image_can_discard(const struct dzn_cmd_buffer *cmdbuf, const struct dzn_image *image)
++{
++   struct dzn_physical_device *pdev =
++      container_of(cmdbuf->vk.base.device->physical, struct dzn_physical_device, vk);
++   const struct dzn_instance *instance =
++      container_of(pdev->vk.instance, struct dzn_instance, vk);
++
++   if (instance->debug_flags & DZN_DEBUG_NO_DISCARD)
++      return false;
++
++   if (pdev->desc.vendor_id == 0x8086 && image->desc.DepthOrArraySize > 1) {
++      switch (image->desc.Format) {
++      case DXGI_FORMAT_R24G8_TYPELESS:
++      case DXGI_FORMAT_D24_UNORM_S8_UINT:
++      case DXGI_FORMAT_R32G8X24_TYPELESS:
++      case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
++         return false;
++      default:
++         break;
++      }
++   }
++
++   return true;
++}
++
+ static VkResult
+ dzn_cmd_buffer_queue_image_range_state_transition(struct dzn_cmd_buffer *cmdbuf,
+                                                   const struct dzn_image *image,
+@@ -258,8 +295,6 @@ dzn_cmd_buffer_queue_image_range_layout_transition(struct dzn_cmd_buffer *cmdbuf
+    if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED)
+       flags |= DZN_QUEUE_TRANSITION_BEFORE_IS_UNDEFINED;
+ 
+-   const struct dzn_instance *instance =
+-      container_of(cmdbuf->vk.base.device->physical->instance, struct dzn_instance, vk);
+    bool discard =
+       old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+       new_layout != VK_IMAGE_LAYOUT_UNDEFINED &&
+@@ -267,7 +302,7 @@ dzn_cmd_buffer_queue_image_range_layout_transition(struct dzn_cmd_buffer *cmdbuf
+       cmdbuf->type == D3D12_COMMAND_LIST_TYPE_DIRECT &&
+       (image->desc.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
+                             D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) &&
+-      !(instance->debug_flags & DZN_DEBUG_NO_DISCARD);
++      dzn_image_can_discard(cmdbuf, image);
+ 
+    dzn_foreach_aspect(aspect, dzn_image_aspects(image, range->aspectMask)) {
+       D3D12_RESOURCE_STATES after =
+@@ -395,8 +430,6 @@ dzn_cmd_buffer_image_barrier(struct dzn_cmd_buffer *cmdbuf,
+    uint32_t plane_count = first_plane == 0 && (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) ? 2 : 1;
+    uint32_t image_planes =
+       vk_format_has_depth(image->vk.format) && vk_format_has_stencil(image->vk.format) ? 2 : 1;
+-   const struct dzn_instance *instance =
+-      container_of(cmdbuf->vk.base.device->physical->instance, struct dzn_instance, vk);
+    D3D12_TEXTURE_BARRIER texture = {
+       .SyncBefore = sync_before,
+       .SyncAfter = sync_after,
+@@ -414,7 +447,7 @@ dzn_cmd_buffer_image_barrier(struct dzn_cmd_buffer *cmdbuf,
+       .Flags = layout_before == D3D12_BARRIER_LAYOUT_UNDEFINED &&
+                layout_after != D3D12_BARRIER_LAYOUT_UNDEFINED &&
+                first_plane == 0 && plane_count == image_planes &&
+-               !(instance->debug_flags & DZN_DEBUG_NO_DISCARD) ?
++               dzn_image_can_discard(cmdbuf, image) ?
+                D3D12_TEXTURE_BARRIER_FLAG_DISCARD : D3D12_TEXTURE_BARRIER_FLAG_NONE,
+    };
+    D3D12_BARRIER_GROUP group = {
+@@ -1687,8 +1720,6 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
+ 
+    uint32_t num_barrier_groups = 0;
+    D3D12_BARRIER_GROUP groups[3];
+-   const struct dzn_instance *instance =
+-      container_of(cmdbuf->vk.base.device->physical->instance, struct dzn_instance, vk);
+ 
+    /* Some input image barriers will expand into 2 outputs, and some will turn into buffer barriers.
+     * Do a first pass and count how much we need to allocate. */
+@@ -1883,7 +1914,7 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
+          texture_barriers[tbar].pResource = image->res;
+          texture_barriers[tbar].Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
+          if (texture_barriers[tbar].LayoutBefore == D3D12_BARRIER_LAYOUT_UNDEFINED &&
+-             !(instance->debug_flags & DZN_DEBUG_NO_DISCARD))
++             dzn_image_can_discard(cmdbuf, image))
+             texture_barriers[tbar].Flags |= D3D12_TEXTURE_BARRIER_FLAG_DISCARD;
+          ++tbar;
+       }

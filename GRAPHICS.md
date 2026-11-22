@@ -668,6 +668,13 @@ reads after a copy writes it, so shadow maps that an app uploaded came out
 with bands of wrong rows. On Intel GPUs Ika's Dozen clears the depth or
 stencil plane of a texture before a copy writes it
 ([dzn-intel-depth-copies.patch](src/tools/mesa/dzn-intel-depth-copies.patch)).
+The UHD 770's driver hangs the GPU for good, without resetting it, when a
+barrier discards a depth-stencil texture with a stencil plane and several
+array layers (a 2D array or cube of D24S8 or D32S8): the app never
+finishes, and every app using the GPU in WSL, and `wsl.exe` itself, hang
+with it until Windows restarts. On Intel GPUs Ika's Dozen never discards
+such a texture
+([dzn-intel-ds-array-discard.patch](src/tools/mesa/dzn-intel-ds-array-discard.patch)).
 
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL

@@ -67,3 +67,4 @@ dzn-intel-8bit-copies.patch
 dzn-flat-vertex-gs.patch
 dzn-intel-blend.patch
 dzn-intel-depth-copies.patch
+dzn-intel-ds-array-discard.patch
