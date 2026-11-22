@@ -675,6 +675,10 @@ finishes, and every app using the GPU in WSL, and `wsl.exe` itself, hang
 with it until Windows restarts. On Intel GPUs Ika's Dozen never discards
 such a texture
 ([dzn-intel-ds-array-discard.patch](src/tools/mesa/dzn-intel-ds-array-discard.patch)).
+Intel's drivers also copy multisampled depth-stencil textures wrongly
+(stencil rows and array layers that keep their old values), so on Intel GPUs
+Ika's Dozen copies them with a draw that writes each sample
+([dzn-intel-msaa-ds-copies.patch](src/tools/mesa/dzn-intel-msaa-ds-copies.patch)).
 
 The console and app windows draw with OpenGL through Mesa's D3D12 driver
 (`GALLIUM_DRIVER=d3d12`), unless you set a `GALLIUM_DRIVER`. Mesa's OpenGL

@@ -1,0 +1,40 @@
+dzn: Copy multisampled depth-stencil textures with a blit on Intel
+
+Intel's Direct3D 12 drivers copy multisampled depth-stencil textures
+wrongly with CopyTextureRegion. On a UHD 770 (32.0.101.7092) and an Iris
+Plus 650 (31.0.101.2145) under WSL2, 18 dEQP-VK
+copy_and_blit.*.depth_stencil_msaa_copy cases failed: the stencil of a
+whole D24S8 copy read back as 0 from row 16 on, and a copy from one layer
+of a 4-sample D24S8 or D32 array to another left the destination layer at
+its clear value. The RTX 4080 of the same laptop passed them all.
+Neither a NULL source box nor moving the destination through a read
+layout before the copy changed anything.
+
+Dozen already turns a partial copy of a multisampled or depth-stencil
+texture into a per-sample blit (D3D12 copies those only as whole
+subresources), and the partial cases passed on Intel. On Intel GPUs,
+copy every multisampled depth-stencil texture with that blit.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 741f257..08e7517 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -5351,6 +5351,18 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
+       }
+    }
+ 
++   /* Intel's Direct3D 12 drivers copy multisampled depth-stencil textures
++    * wrongly with CopyTextureRegion: on a UHD 770 and an Iris Plus 650 under
++    * WSL2 the copied stencil of a D24S8 texture read back as 0 below its
++    * first rows, and a copy between layers of a multisampled depth array
++    * did not show up in the destination layer. The per-sample blit, which
++    * Dozen already uses for partial copies of such textures, copies them
++    * right.
++    */
++   if (pdev->desc.vendor_id == 0x8086 && src->vk.samples > 1 &&
++       ((src->desc.Flags | dst->desc.Flags) & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
++      use_blit = true;
++
+    if (use_blit) {
+       /* This copy -> blit lowering doesn't work if the vkCmdCopyImage[2]() is
+        * is issued on a transfer queue, but we don't have any better option

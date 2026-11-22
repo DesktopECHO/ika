@@ -68,3 +68,4 @@ dzn-flat-vertex-gs.patch
 dzn-intel-blend.patch
 dzn-intel-depth-copies.patch
 dzn-intel-ds-array-discard.patch
+dzn-intel-msaa-ds-copies.patch
