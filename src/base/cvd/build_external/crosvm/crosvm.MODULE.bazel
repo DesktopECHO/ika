@@ -90,6 +90,9 @@ crosvm_bin.annotation(
         # Only a dma-buf scanout goes to the compositor; an opaque fd (an
         # optimal image under WSL2) is read back instead.
         "@//build_external/crosvm:PATCH.crosvm-display-dmabuf-only.patch",
+        # A blob scanout goes to the compositor with the modifier of the
+        # buffer's layout, as the guest gives none (tiled Venus buffers).
+        "@//build_external/crosvm:PATCH.crosvm-scanout-blob-modifier.patch",
         "@//build_external/crosvm:PATCH.crosvm-enable-vulkano-gralloc.patch",
         "@//build_external/crosvm:PATCH.crosvm-fixed-blob-mapping-virglrenderer.patch",
         # The virtio-media decoder adapter gets no GPU resource bridge, which it
@@ -236,6 +239,9 @@ crosvm_bin.annotation(
         # With fixed blob mapping (Venus), map dma-buf blobs that carry
         # Vulkan info directly instead of through a Vulkan import.
         "@//build_external/crosvm:PATCH.crosvm-fixed-blob-mapping-dmabuf-devices.patch",
+        # A blob scanout goes to the compositor with the modifier of the
+        # buffer's layout, as the guest gives none (tiled Venus buffers).
+        "@//build_external/crosvm:PATCH.crosvm-scanout-blob-modifier-devices.patch",
     ],
     repositories = ["crosvm_bin"],
 )
@@ -264,8 +270,10 @@ crosvm_bin.annotation(
         "@//build_external/crosvm:PATCH.rutabaga_gfx_build_rs.patch",
         # Capability gate for the vulkano backend enabled by
         # PATCH.crosvm-enable-vulkano-gralloc.patch: prefer minigbm when it
-        # initializes (x86-64 and any host with a minigbm driver), start and
-        # select Vulkano only when it doesn't (Apple Silicon / Asahi).
+        # initializes, start and select Vulkano only when it doesn't. The
+        # bundled minigbm has none of its GPU drivers, so it initializes on no
+        # host and Vulkano allocates Android's buffers in Venus and Honeykrisp
+        # modes everywhere.
         "@//build_external/crosvm:PATCH.rutabaga_gfx-gralloc-vulkano-fallback.patch",
         # Create Vulkano's layout-query images linear, so the cross-domain
         # context (Venus mode's gralloc) can read their strides.
@@ -317,6 +325,13 @@ crosvm_bin.annotation(
         # video played. It changes code of the two patches above, and sorts
         # after them.
         "@//build_external/crosvm:PATCH.rutabaga_gfx_yuv-rgba-fallback.patch",
+        # Buffers only GPUs use (Android's window buffers and SurfaceFlinger's
+        # client target) are tiled images with a DRM format modifier the driver
+        # picks, instead of linear ones, which a GPU samples and draws into
+        # far more slowly: SurfaceFlinger's composition of a desktop took an
+        # Intel HD 6000 5-6 ms of GPU time instead of 3. It changes code of
+        # the patches above and its name sorts after them.
+        "@//build_external/crosvm:PATCH.rutabaga_gfx_z-vulkano-tiled-images.patch",
     ],
     repositories = ["crosvm_bin"],
 )

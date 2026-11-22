@@ -1,0 +1,597 @@
+diff --git a/src/rutabaga_gralloc/vulkano_gralloc.rs b/src/rutabaga_gralloc/vulkano_gralloc.rs
+index 7d345d0..700d6ea 100644
+--- a/src/rutabaga_gralloc/vulkano_gralloc.rs
++++ b/src/rutabaga_gralloc/vulkano_gralloc.rs
+@@ -91,6 +91,8 @@ use vulkano::VulkanError;
+ use vulkano::VulkanLibrary;
+ use vulkano::VulkanObject;
+ 
++use magma_gpu::util::round_up_to_page_size;
++
+ use crate::rutabaga_gralloc::formats::canonical_image_requirements;
+ use crate::rutabaga_gralloc::formats::DrmFormat;
+ use crate::rutabaga_gralloc::formats::DRM_FORMAT_NV12;
+@@ -567,7 +569,12 @@ impl VulkanoGralloc {
+ 
+             let desired_extensions = Self::get_desired_device_extensions();
+ 
+-            let intersection = supported_extensions.intersection(&desired_extensions);
++            let mut intersection = supported_extensions.intersection(&desired_extensions);
++            // ika: under Vulkan 1.1, VK_EXT_image_drm_format_modifier needs
++            // VK_KHR_image_format_list; without it the device would not be created.
++            if !intersection.khr_image_format_list {
++                intersection.ext_image_drm_format_modifier = false;
++            }
+ 
+             if let Ok((device, mut queues)) = Device::new(
+                 physical.clone(),
+@@ -878,10 +885,13 @@ impl VulkanoGralloc {
+     //
+     // In addition, we trust Vulkano to validate image parameters are within the Vulkan spec.
+     // TODO(tutankhamen): Do we still need a separate MemoryRequirements?
+-    unsafe fn create_image(
+-        &mut self,
+-        info: ImageAllocationInfo,
+-    ) -> RutabagaResult<(Arc<image::sys::RawImage>, MemoryRequirements)> {
++    // ika: `modifier` is the one the image must have, from its memory
++    // requirements; None lets a tiled image's driver choose (TiledLayout).
++    unsafe fn create_image(
++        &mut self,
++        info: ImageAllocationInfo,
++        modifier: Option<u64>,
++    ) -> RutabagaResult<(Arc<image::sys::RawImage>, MemoryRequirements, Option<TiledLayout>)> {
+         let device = if self.has_integrated_gpu {
+             self.devices
+                 .get(&PhysicalDeviceType::IntegratedGpu)
+@@ -914,7 +924,13 @@ impl VulkanoGralloc {
+                 Self::optimal_image_create_info(device, info.width, info.height, optimal_format)?;
+             let raw_image = Arc::new(image::sys::RawImage::new(device.clone(), create_info)?);
+             let memory_requirements = raw_image.memory_requirements()[0];
+-            return Ok((raw_image, memory_requirements));
++            return Ok((raw_image, memory_requirements, None));
++        }
++
++        if let Some((raw_image, memory_requirements, layout)) =
++            Self::tiled_image(device, info, modifier)?
++        {
++            return Ok((raw_image, memory_requirements, Some(layout)));
+         }
+ 
+         let create_info = image::sys::ImageCreateInfo {
+@@ -967,7 +983,489 @@ impl VulkanoGralloc {
+ 
+         // Won't panic since this not a swapchain image.
+         let memory_requirements = raw_image.memory_requirements()[0];
+-        Ok((raw_image, memory_requirements))
++        Ok((raw_image, memory_requirements, None))
++    }
++}
++
++// ika: a tiled image for a buffer only GPUs use. Android's window buffers
++// (and SurfaceFlinger's client target) were linear images, which a GPU samples
++// and draws into far more slowly than tiled ones: SurfaceFlinger's composition
++// of a desktop took an Intel HD 6000 5-6 ms instead of 3 ms. The driver picks
++// the layout from the DRM format modifiers it can share as a dma-buf with all
++// the features a linear image of the format has, so the guest's Venus driver
++// (and the console, for a scanout) open the buffer with that modifier.
++#[derive(Copy, Clone)]
++struct TiledLayout {
++    modifier: u64,
++    row_pitch: u32,
++    offset: u32,
++}
++
++const DRM_FORMAT_MOD_LINEAR: u64 = 0;
++
++// Gralloc flags of a buffer the CPU, cameras and video engines never touch.
++const TILED_FLAGS: u32 = 1 /* SCANOUT */ | 4 /* RENDERING */ | 32 /* TEXTURING */;
++const TILED_NEEDS_ONE_OF: u32 = 4 /* RENDERING */ | 32 /* TEXTURING */;
++
++// Vulkan's values, for the structures below.
++const VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO: i32 = 14;
++const VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2: i32 = 1000059002;
++const VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2: i32 = 1000059003;
++const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2: i32 = 1000059004;
++const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO: i32 = 1000071000;
++const VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES: i32 = 1000071001;
++const VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO: i32 = 1000072001;
++const VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT: i32 = 1000158000;
++const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT: i32 = 1000158002;
++const VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT: i32 = 1000158003;
++const VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT: i32 = 1000158005;
++const VK_IMAGE_TYPE_2D: i32 = 1;
++const VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT: i32 = 1000158000;
++const VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT: u32 = 0x200;
++const VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT: u32 = 0x2;
++const VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT: u32 = 0x80;
++const VK_IMAGE_USAGE_TRANSFER_SRC_BIT: u32 = 0x1;
++const VK_IMAGE_USAGE_TRANSFER_DST_BIT: u32 = 0x2;
++const VK_IMAGE_USAGE_SAMPLED_BIT: u32 = 0x4;
++const VK_IMAGE_USAGE_STORAGE_BIT: u32 = 0x8;
++const VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT: u32 = 0x10;
++const VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT: u32 = 0x1;
++const VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT: u32 = 0x2;
++const VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT: u32 = 0x80;
++// The features a tiled image must keep from the format's linear ones: sampling,
++// storage, drawing and blending, blits and copies.
++const TILED_FEATURES: u32 = 0x1 | 0x2 | 0x80 | 0x100 | 0x400 | 0x800 | 0x1000 | 0x4000 | 0x8000;
++
++#[repr(C)]
++struct VkDrmFormatModifierProperties {
++    drm_format_modifier: u64,
++    drm_format_modifier_plane_count: u32,
++    drm_format_modifier_tiling_features: u32,
++}
++
++#[repr(C)]
++struct VkDrmFormatModifierPropertiesList {
++    s_type: i32,
++    p_next: *mut std::ffi::c_void,
++    drm_format_modifier_count: u32,
++    p_drm_format_modifier_properties: *mut VkDrmFormatModifierProperties,
++}
++
++#[repr(C)]
++struct VkFormatProperties2 {
++    s_type: i32,
++    p_next: *mut std::ffi::c_void,
++    linear_tiling_features: u32,
++    optimal_tiling_features: u32,
++    buffer_features: u32,
++}
++
++#[repr(C)]
++struct VkPhysicalDeviceImageFormatInfo2 {
++    s_type: i32,
++    p_next: *const std::ffi::c_void,
++    format: i32,
++    image_type: i32,
++    tiling: i32,
++    usage: u32,
++    flags: u32,
++}
++
++#[repr(C)]
++struct VkPhysicalDeviceExternalImageFormatInfo {
++    s_type: i32,
++    p_next: *const std::ffi::c_void,
++    handle_type: u32,
++}
++
++#[repr(C)]
++struct VkPhysicalDeviceImageDrmFormatModifierInfo {
++    s_type: i32,
++    p_next: *const std::ffi::c_void,
++    drm_format_modifier: u64,
++    sharing_mode: i32,
++    queue_family_index_count: u32,
++    p_queue_family_indices: *const u32,
++}
++
++#[repr(C)]
++struct VkImageFormatProperties2 {
++    s_type: i32,
++    p_next: *mut std::ffi::c_void,
++    max_width: u32,
++    max_height: u32,
++    max_depth: u32,
++    max_mip_levels: u32,
++    max_array_layers: u32,
++    sample_counts: u32,
++    max_resource_size: u64,
++}
++
++#[repr(C)]
++struct VkExternalImageFormatProperties {
++    s_type: i32,
++    p_next: *mut std::ffi::c_void,
++    external_memory_features: u32,
++    export_from_imported_handle_types: u32,
++    compatible_handle_types: u32,
++}
++
++#[repr(C)]
++struct VkImageCreateInfo {
++    s_type: i32,
++    p_next: *const std::ffi::c_void,
++    flags: u32,
++    image_type: i32,
++    format: i32,
++    width: u32,
++    height: u32,
++    depth: u32,
++    mip_levels: u32,
++    array_layers: u32,
++    samples: u32,
++    tiling: i32,
++    usage: u32,
++    sharing_mode: i32,
++    queue_family_index_count: u32,
++    p_queue_family_indices: *const u32,
++    initial_layout: i32,
++}
++
++#[repr(C)]
++struct VkExternalMemoryImageCreateInfo {
++    s_type: i32,
++    p_next: *const std::ffi::c_void,
++    handle_types: u32,
++}
++
++#[repr(C)]
++struct VkImageDrmFormatModifierListCreateInfo {
++    s_type: i32,
++    p_next: *const std::ffi::c_void,
++    drm_format_modifier_count: u32,
++    p_drm_format_modifiers: *const u64,
++}
++
++#[repr(C)]
++struct VkImageDrmFormatModifierProperties {
++    s_type: i32,
++    p_next: *mut std::ffi::c_void,
++    drm_format_modifier: u64,
++}
++
++#[repr(C)]
++struct VkImageSubresource {
++    aspect_mask: u32,
++    mip_level: u32,
++    array_layer: u32,
++}
++
++#[repr(C)]
++#[derive(Default)]
++struct VkSubresourceLayout {
++    offset: u64,
++    size: u64,
++    row_pitch: u64,
++    array_pitch: u64,
++    depth_pitch: u64,
++}
++
++impl VulkanoGralloc {
++    // ika: whether a buffer gets a tiled image (see TiledLayout).
++    fn wants_tiled_image(device: &Device, info: ImageAllocationInfo) -> bool {
++        device.enabled_extensions().ext_image_drm_format_modifier
++            && !Self::uses_optimal_images(device)
++            && info.flags.0 & !TILED_FLAGS == 0
++            && info.flags.0 & TILED_NEEDS_ONE_OF != 0
++            && info
++                .drm_format
++                .planar_layout()
++                .map_or(false, |layout| layout.num_planes == 1)
++    }
++
++    // ika: the modifiers a tiled image of this format may have, and the usage
++    // it is created with.
++    fn tiled_image_modifiers(
++        device: &Device,
++        format: i32,
++        width: u32,
++        height: u32,
++    ) -> (Vec<u64>, u32) {
++        let physical = device.physical_device();
++        let fns = physical.instance().fns();
++
++        let mut list = VkDrmFormatModifierPropertiesList {
++            s_type: VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
++            p_next: std::ptr::null_mut(),
++            drm_format_modifier_count: 0,
++            p_drm_format_modifier_properties: std::ptr::null_mut(),
++        };
++        let mut props = VkFormatProperties2 {
++            s_type: VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
++            p_next: &mut list as *mut _ as *mut std::ffi::c_void,
++            linear_tiling_features: 0,
++            optimal_tiling_features: 0,
++            buffer_features: 0,
++        };
++        // SAFETY: the structures are Vulkan's and the chain ends; the first call
++        // only counts the modifiers.
++        unsafe {
++            (fns.v1_1.get_physical_device_format_properties2)(
++                physical.handle(),
++                std::mem::transmute(format),
++                &mut props as *mut VkFormatProperties2 as *mut _,
++            )
++        };
++        let mut modifiers: Vec<VkDrmFormatModifierProperties> = (0..list
++            .drm_format_modifier_count)
++            .map(|_| VkDrmFormatModifierProperties {
++                drm_format_modifier: 0,
++                drm_format_modifier_plane_count: 0,
++                drm_format_modifier_tiling_features: 0,
++            })
++            .collect();
++        list.p_drm_format_modifier_properties = modifiers.as_mut_ptr();
++        props.p_next = &mut list as *mut _ as *mut std::ffi::c_void;
++        // SAFETY: as above, with room for every modifier.
++        unsafe {
++            (fns.v1_1.get_physical_device_format_properties2)(
++                physical.handle(),
++                std::mem::transmute(format),
++                &mut props as *mut VkFormatProperties2 as *mut _,
++            )
++        };
++        modifiers.truncate(list.drm_format_modifier_count as usize);
++
++        let needed = props.linear_tiling_features & TILED_FEATURES;
++        if needed & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT == 0 {
++            return (Vec::new(), 0);
++        }
++        let mut usage =
++            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++        if needed & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT != 0 {
++            usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
++        }
++        if needed & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT != 0 {
++            usage |= VK_IMAGE_USAGE_STORAGE_BIT;
++        }
++
++        let chosen = modifiers
++            .iter()
++            .filter(|m| {
++                // One memory plane (no compression metadata the guest and the
++                // console would have to share), all the linear image's features.
++                m.drm_format_modifier != DRM_FORMAT_MOD_LINEAR
++                    && m.drm_format_modifier_plane_count == 1
++                    && m.drm_format_modifier_tiling_features & needed == needed
++            })
++            .filter(|m| {
++                let modifier_info = VkPhysicalDeviceImageDrmFormatModifierInfo {
++                    s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT,
++                    p_next: std::ptr::null(),
++                    drm_format_modifier: m.drm_format_modifier,
++                    sharing_mode: 0,
++                    queue_family_index_count: 0,
++                    p_queue_family_indices: std::ptr::null(),
++                };
++                let external_info = VkPhysicalDeviceExternalImageFormatInfo {
++                    s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO,
++                    p_next: &modifier_info as *const _ as *const std::ffi::c_void,
++                    handle_type: VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++                };
++                let format_info = VkPhysicalDeviceImageFormatInfo2 {
++                    s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
++                    p_next: &external_info as *const _ as *const std::ffi::c_void,
++                    format,
++                    image_type: VK_IMAGE_TYPE_2D,
++                    tiling: VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
++                    usage,
++                    flags: 0,
++                };
++                let mut external_props = VkExternalImageFormatProperties {
++                    s_type: VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES,
++                    p_next: std::ptr::null_mut(),
++                    external_memory_features: 0,
++                    export_from_imported_handle_types: 0,
++                    compatible_handle_types: 0,
++                };
++                let mut image_props = VkImageFormatProperties2 {
++                    s_type: VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
++                    p_next: &mut external_props as *mut _ as *mut std::ffi::c_void,
++                    max_width: 0,
++                    max_height: 0,
++                    max_depth: 0,
++                    max_mip_levels: 0,
++                    max_array_layers: 0,
++                    sample_counts: 0,
++                    max_resource_size: 0,
++                };
++                // SAFETY: Vulkan's structures, chains ending in null.
++                let result = unsafe {
++                    (fns.v1_1.get_physical_device_image_format_properties2)(
++                        physical.handle(),
++                        &format_info as *const VkPhysicalDeviceImageFormatInfo2 as *const _,
++                        &mut image_props as *mut VkImageFormatProperties2 as *mut _,
++                    )
++                };
++                result.as_raw() == 0
++                    && image_props.max_width >= width
++                    && image_props.max_height >= height
++                    && external_props.external_memory_features
++                        & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT
++                        != 0
++            })
++            .map(|m| m.drm_format_modifier)
++            .collect();
++        (chosen, usage)
++    }
++
++    // ika: creates a tiled image for `info` with one of `allowed` (all the
++    // suitable modifiers when None) and returns it with its layout, or None
++    // when the buffer stays linear.
++    unsafe fn tiled_image(
++        device: &Arc<Device>,
++        info: ImageAllocationInfo,
++        allowed: Option<u64>,
++    ) -> RutabagaResult<Option<(Arc<image::sys::RawImage>, MemoryRequirements, TiledLayout)>> {
++        if !Self::wants_tiled_image(device, info) || allowed == Some(DRM_FORMAT_MOD_LINEAR) {
++            return Ok(None);
++        }
++        let vulkan_format = info.drm_format.vulkan_format()?;
++        let format = vulkan_format as i32;
++        let (mut modifiers, usage) =
++            Self::tiled_image_modifiers(device, format, info.width, info.height);
++        if let Some(modifier) = allowed {
++            modifiers.retain(|m| *m == modifier);
++        }
++        if modifiers.is_empty() {
++            return Ok(None);
++        }
++
++        let list_info = VkImageDrmFormatModifierListCreateInfo {
++            s_type: VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
++            p_next: std::ptr::null(),
++            drm_format_modifier_count: modifiers.len() as u32,
++            p_drm_format_modifiers: modifiers.as_ptr(),
++        };
++        let external_info = VkExternalMemoryImageCreateInfo {
++            s_type: VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
++            p_next: &list_info as *const _ as *const std::ffi::c_void,
++            handle_types: VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++        };
++        let create_info = VkImageCreateInfo {
++            s_type: VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++            p_next: &external_info as *const _ as *const std::ffi::c_void,
++            flags: 0,
++            image_type: VK_IMAGE_TYPE_2D,
++            format,
++            width: info.width,
++            height: info.height,
++            depth: 1,
++            mip_levels: 1,
++            array_layers: 1,
++            samples: 1,
++            tiling: VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
++            usage,
++            sharing_mode: 0,
++            queue_family_index_count: 0,
++            p_queue_family_indices: std::ptr::null(),
++            initial_layout: 0,
++        };
++        let fns = device.fns();
++        let mut handle = vulkano::Handle::from_raw(0);
++        let result = (fns.v1_0.create_image)(
++            device.handle(),
++            &create_info as *const VkImageCreateInfo as *const _,
++            std::ptr::null(),
++            &mut handle,
++        );
++        if result.as_raw() != 0 {
++            warn!("tiled image {}x{}: vkCreateImage {}", info.width, info.height, result.as_raw());
++            return Ok(None);
++        }
++
++        let mut modifier_props = VkImageDrmFormatModifierProperties {
++            s_type: VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
++            p_next: std::ptr::null_mut(),
++            drm_format_modifier: DRM_FORMAT_MOD_LINEAR,
++        };
++        let result = (fns
++            .ext_image_drm_format_modifier
++            .get_image_drm_format_modifier_properties_ext)(
++            device.handle(),
++            handle,
++            &mut modifier_props as *mut VkImageDrmFormatModifierProperties as *mut _,
++        );
++        let subresource = VkImageSubresource {
++            aspect_mask: VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT,
++            mip_level: 0,
++            array_layer: 0,
++        };
++        let mut layout = VkSubresourceLayout::default();
++        (fns.v1_0.get_image_subresource_layout)(
++            device.handle(),
++            handle,
++            &subresource as *const VkImageSubresource as *const _,
++            &mut layout as *mut VkSubresourceLayout as *mut _,
++        );
++
++        let mut image_usage = ImageUsage::SAMPLED | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST;
++        if usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT != 0 {
++            image_usage |= ImageUsage::COLOR_ATTACHMENT;
++        }
++        if usage & VK_IMAGE_USAGE_STORAGE_BIT != 0 {
++            image_usage |= ImageUsage::STORAGE;
++        }
++        // SAFETY: the handle is the image just created on this device, with
++        // no memory bound, as the create info says (apart from the modifier
++        // list, which vulkano cannot express).
++        let raw_image = Arc::new(image::sys::RawImage::from_handle(
++            device.clone(),
++            handle,
++            image::sys::ImageCreateInfo {
++                dimensions: ImageDimensions::Dim2d {
++                    width: info.width,
++                    height: info.height,
++                    array_layers: 1,
++                },
++                format: Some(vulkan_format),
++                samples: SampleCount::Sample1,
++                tiling: ImageTiling::DrmFormatModifier,
++                usage: image_usage,
++                mip_levels: 1,
++                sharing: Sharing::Exclusive,
++                external_memory_handle_types: ExternalMemoryHandleTypes::DMA_BUF,
++                ..Default::default()
++            },
++        ));
++        if result.as_raw() != 0
++            || layout.row_pitch == 0
++            || layout.row_pitch > u32::MAX as u64
++            || layout.offset > u32::MAX as u64
++        {
++            warn!("tiled image {}x{}: no layout", info.width, info.height);
++            return Ok(None);
++        }
++
++        let memory_requirements = raw_image.memory_requirements()[0];
++        // The guest asks for the size rounded up to its page size, which a
++        // dedicated allocation must match.
++        let size = memory_requirements.layout.size();
++        if memory_requirements.requires_dedicated_allocation
++            && round_up_to_page_size(size)? != size
++        {
++            return Ok(None);
++        }
++
++        Ok(Some((
++            raw_image,
++            memory_requirements,
++            TiledLayout {
++                modifier: modifier_props.drm_format_modifier,
++                row_pitch: layout.row_pitch as u32,
++                offset: layout.offset as u32,
++            },
++        )))
+     }
+ }
+ 
+@@ -998,7 +1496,7 @@ impl Gralloc for VulkanoGralloc {
+     ) -> RutabagaResult<ImageMemoryRequirements> {
+         let mut reqs: ImageMemoryRequirements = Default::default();
+ 
+-        let (raw_image, memory_requirements) = unsafe { self.create_image(info)? };
++        let (raw_image, memory_requirements, tiled) = unsafe { self.create_image(info, None)? };
+ 
+         let device_type = if self.has_integrated_gpu {
+             &PhysicalDeviceType::IntegratedGpu
+@@ -1019,6 +1517,10 @@ impl Gralloc for VulkanoGralloc {
+             let canonical = canonical_image_requirements(info)?;
+             reqs.strides = canonical.strides;
+             reqs.offsets = canonical.offsets;
++        } else if let Some(layout) = tiled {
++            reqs.strides[0] = layout.row_pitch;
++            reqs.offsets[0] = layout.offset;
++            reqs.modifier = layout.modifier;
+         } else {
+             let planar_layout = info.drm_format.planar_layout()?;
+ 
+@@ -1138,7 +1640,9 @@ impl Gralloc for VulkanoGralloc {
+     }
+ 
+     fn allocate_memory(&mut self, reqs: ImageMemoryRequirements) -> RutabagaResult<MagmaGpuHandle> {
+-        let (raw_image, memory_requirements) = unsafe { self.create_image(reqs.info)? };
++        // ika: the image the guest was given the layout of.
++        let (raw_image, memory_requirements, _) =
++            unsafe { self.create_image(reqs.info, Some(reqs.modifier))? };
+ 
+         let vulkan_info = reqs.vulkan_info.ok_or(RutabagaError::InvalidVulkanInfo)?;
+ 
+diff --git a/src/rutabaga_gralloc/vulkano_gralloc/sys/linux.rs b/src/rutabaga_gralloc/vulkano_gralloc/sys/linux.rs
+index dcddcfe..50ea784 100644
+--- a/src/rutabaga_gralloc/vulkano_gralloc/sys/linux.rs
++++ b/src/rutabaga_gralloc/vulkano_gralloc/sys/linux.rs
+@@ -30,6 +30,10 @@ impl VulkanoGralloc {
+             khr_external_memory: true,
+             khr_external_memory_fd: true,
+             ext_external_memory_dma_buf: true,
++            // ika: tiled images for the buffers only GPUs use (see
++            // VulkanoGralloc::tiled_image); the extension needs the format list.
++            ext_image_drm_format_modifier: true,
++            khr_image_format_list: true,
+             ..DeviceExtensions::empty()
+         }
+     }

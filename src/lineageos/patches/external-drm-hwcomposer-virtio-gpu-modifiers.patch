@@ -1,0 +1,28 @@
+Patch summary:
+On virtio-gpu, which takes only linear frame buffers, add a frame buffer
+without the DRM format modifier the gralloc reports for the buffer. In the
+venus and honeykrisp GPU modes the host allocates SurfaceFlinger's client
+target as a tiled image and scans it out with that layout itself (crosvm's
+PATCH.crosvm-scanout-blob-modifier.patch), while the guest's Vulkan driver
+renders into it with the modifier; the composer refused the buffer ("No
+ADDFB2 with modifier support") and showed nothing.
+
+diff --git a/drm/DrmFbImporter.cpp b/drm/DrmFbImporter.cpp
+index fe80891..12b105b 100644
+--- a/drm/DrmFbImporter.cpp
++++ b/drm/DrmFbImporter.cpp
+@@ -65,6 +65,14 @@ auto DrmFbIdHandle::CreateInstance(BufferInfo *bo, GemHandle first_gem_handle,
+   auto has_modifiers = bo->modifiers[0] != DRM_FORMAT_MOD_NONE &&
+                        bo->modifiers[0] != DRM_FORMAT_MOD_INVALID;
+ 
++  /* Ika: virtio-gpu takes only linear frame buffers, but the host keeps the
++   * buffer in the layout it gave it (a tiled one in Venus and Honeykrisp
++   * modes) and opens a scanout with that layout itself. */
++  if (!drm.HasAddFb2ModifiersSupport() && has_modifiers &&
++      drm.GetName() == "virtio_gpu") {
++    has_modifiers = false;
++  }
++
+   if (!drm.HasAddFb2ModifiersSupport() && has_modifiers) {
+     ALOGE("No ADDFB2 with modifier support. Can't import modifier %" PRIu64,
+           bo->modifiers[0]);

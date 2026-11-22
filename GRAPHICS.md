@@ -68,6 +68,12 @@ in these modes. With a Settings window scrolling on the desktop in the
 `gfxstream_guest_angle` mode, RenderEngine takes 3.4 ms a frame on Vulkan and
 7.5 ms on OpenGL ES on an Intel HD 6000 (Broadwell), 6.5 ms and 36 ms on a
 Kaby Lake GPU under WSL2, and 0.3 ms and 3.2 ms on an M1 Pro.
+The figure runs from RenderEngine's start to the moment its fence signals,
+so it differs in kind between modes. In `venus` RenderEngine hands the frame
+to the GPU without waiting, and the figure includes all of the GPU's work:
+5.5 ms on the HD 6000. In `gfxstream_guest_angle` RenderEngine's
+`vkQueueSubmit` blocks, the fence has signaled before RenderEngine returns,
+and SurfaceFlinger spends 12 ms a frame there against 3.5 ms in `venus`.
 `ika adb shell dumpsys SurfaceFlinger` names the one in use:
 `RE Vulkan (Ganesh)` or `RE GLES (Ganesh)`.
 
@@ -256,6 +262,17 @@ Life Extreme scores 5,551 to 5,580 against 5,809 to 5,845, Steel Nomad Light
 
 What Ika changes for it:
 
+- crosvm's gralloc, which allocates Android's buffers in this mode and in
+  `honeykrisp`, makes the buffers only GPUs use, the apps' window buffers and
+  SurfaceFlinger's frame, tiled images in a layout the host's driver picks
+  (a DRM format modifier, which the guest's driver and the console then use);
+  buffers the CPU, a camera or a video engine touches stay linear. With every
+  buffer linear, SurfaceFlinger's composition of a Settings window over the
+  wallpaper took an Intel HD 6000 6.5 ms of GPU time a frame, as it runs at
+  its lowest clock while composing a desktop; tiled, it takes 3.9 ms, the
+  Settings window's own frames 0.8 ms instead of 3.2, and the GPU is busy 22%
+  of the time instead of 30%. An M1 Pro gains little: its GPU reads linear
+  buffers almost as fast.
 - crosvm maps Venus's GPU memory into the guest within one region it
   registers at the first mapping (fixed blob mapping), as Asahi's muvm does.
   On arm64 hosts without stage-2 forced write-back, Apple Silicon among them,
@@ -321,7 +338,8 @@ normally uses to share host memory with the guest. On Apple Silicon hosts with
   page size.
 - crosvm imports those DMA-BUFs through Vulkan, with rutabaga's Vulkano
   gralloc backend, as minigbm has no driver for the Apple GPU. Vulkano starts
-  only when minigbm cannot, so other hosts keep minigbm.
+  only when minigbm cannot, which is on every host: the minigbm in
+  `ika-base` is built without its GPU drivers.
 - The host display path does not use gfxstream's Vulkan swapchain, which
   would show blank frames with udmabuf memory.
 - The console gets each frame as a DMA-BUF: the shown color buffer is
@@ -377,7 +395,8 @@ little behind `gfxstream_guest_angle`: Sling Shot Extreme's graphics tests at
 How it works:
 
 - crosvm offers the guest a `drm` context beside cross-domain, which still
-  allocates Android's buffers. virglrenderer's renderer for Apple GPUs,
+  allocates Android's buffers, tiled where only GPUs use them (see
+  [Venus](#venus)). virglrenderer's renderer for Apple GPUs,
   built into `ika-base`'s virglrenderer, runs it in crosvm's GPU process; it
   needs no render server. The GPU's memory maps into the guest as Venus's
   does (fixed blob mapping).

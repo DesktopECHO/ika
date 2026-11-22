@@ -1,0 +1,35 @@
+--- a/src/virtio/gpu/virtio_gpu.rs
++++ b/src/virtio/gpu/virtio_gpu.rs
+@@ -488,13 +488,25 @@ impl VirtioGpuScanout {
+         let dmabuf = to_safe_descriptor(handle.os_handle);
+ 
+         let (width, height, format, stride, offset, modifier) = match resource.scanout_data {
+-            Some(data) => (
+-                data.width,
+-                data.height,
+-                data.drm_format,
+-                data.strides[0],
+-                data.offsets[0],
+-                0,
++            // ika: a blob scanout carries no modifier, as the guest's
++            // virtio-gpu takes only linear frame buffers, but the buffer has
++            // the layout the host gave it, the one whose row pitch the guest
++            // passes: tiled for a buffer only GPUs use (Venus and Honeykrisp
++            // modes' gralloc), which the display must open as such.
++            Some(data) => (
++                data.width,
++                data.height,
++                data.drm_format,
++                data.strides[0],
++                data.offsets[0],
++                rutabaga
++                    .resource3d_info(resource.resource_id)
++                    .ok()
++                    .filter(|info| info.strides[0] == data.strides[0])
++                    .map(|info| info.modifier)
++                    // DRM_FORMAT_MOD_INVALID: no layout known, so linear.
++                    .filter(|modifier| *modifier != u64::MAX)
++                    .unwrap_or(0),
+             ),
+             None => {
+                 let query = rutabaga.resource3d_info(resource.resource_id).ok()?;
