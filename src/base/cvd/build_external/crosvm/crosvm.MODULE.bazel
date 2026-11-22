@@ -377,6 +377,18 @@ crosvm_bin.annotation(
 )
 
 crosvm_bin.annotation(
+    crate = "vm_memory",
+    patch_args = ["-p1"],
+    patches = [
+        # Each guest memory region sits in the memory file at the same
+        # position within a huge page as its guest address, so that KVM can
+        # map it with huge pages (x86's RAM above 4 GiB was 1 MiB off).
+        "@//build_external/crosvm:PATCH.vm_memory-huge-page-congruent-offsets.patch",
+    ],
+    repositories = ["crosvm_bin"],
+)
+
+crosvm_bin.annotation(
     crate = "x86_64",
     patch_args = ["-p1"],
     patches = [

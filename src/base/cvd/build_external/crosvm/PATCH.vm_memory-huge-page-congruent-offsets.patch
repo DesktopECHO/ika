@@ -1,0 +1,41 @@
+--- a/src/guest_memory.rs
++++ b/src/guest_memory.rs
+@@ -300,6 +300,21 @@
+             .map(|r| r.shared_obj.as_raw_descriptor())
+             .collect()
+     }
++}
++
++// ika: The offset in the guest memory shm, at or after `offset`, whose position within a host
++// huge page (a PMD: 2 MiB with 4 KiB pages, 32 MiB with 16 KiB pages) is that of `guest_base`.
++// The kernel maps a large shm mapping at an address with the same position within a huge page as
++// its offset, and KVM maps guest memory with huge pages only where the guest address and the host
++// address have the same position. Laid out back to back, the regions after the 1 MiB BIOS
++// region (x86's RAM above 4 GiB) sat 1 MiB off, and KVM mapped all of that memory in 4 KiB pages.
++// The gaps this leaves in the shm are never touched and take no memory.
++fn huge_page_congruent_offset(offset: u64, guest_base: GuestAddress) -> u64 {
++    let page = pagesize() as u64;
++    let huge_page = page * (page / 8);
++    let want = guest_base.offset() % huge_page;
++    let have = offset % huge_page;
++    offset + (want + huge_page - have) % huge_page
+ }
+ 
+ impl GuestMemory {
+@@ -316,7 +331,7 @@
+                 return Err(Error::MemoryNotAligned(range.0, range.1));
+             }
+ 
+-            aligned_size += range.1;
++            aligned_size = huge_page_congruent_offset(aligned_size, range.0) + range.1;
+         }
+ 
+         // NOTE: Some tests rely on the GuestMemory's name when capturing metrics.
+@@ -377,6 +392,7 @@
+                     options: range.2.clone(),
+                 });
+             } else {
++                shm_offset = huge_page_congruent_offset(shm_offset, range.0);
+                 let mapping = MemoryMappingBuilder::new(size)
+                     .from_shared_memory(shm.as_ref())
+                     .offset(shm_offset)
