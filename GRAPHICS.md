@@ -658,10 +658,11 @@ copy
 Intel's Direct3D 12 driver for a UHD 770 under WSL2 ignores the blend
 constant (`glBlendColor`), and writes nothing for a dual-source blend whose
 alpha factors take the second source when the blend writes no alpha (alpha
-masked out, or a format without alpha). On Intel GPUs Ika's Dozen hands a
-blend with the constant to the GPU as a dual-source blend, the fragment
-shader writing the constant as its second output, and gives a blend that
-writes no alpha plain alpha factors
+masked out, or a format without alpha), and gets one wrong whose colour
+factors take the second source when the blend writes only alpha. On Intel GPUs Ika's Dozen hands a blend that
+uses the constant on a channel it writes to the GPU as a dual-source blend,
+the fragment shader writing the constant as its second output, and gives
+the factors of the channels a blend does not write plain values
 ([dzn-intel-blend.patch](src/tools/mesa/dzn-intel-blend.patch)).
 Intel's drivers also leave a depth texture partly stale for the GPU's own
 reads after a copy writes it, so shadow maps that an app uploaded came out

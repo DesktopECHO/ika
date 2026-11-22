@@ -22,6 +22,13 @@ adjacency, which OpenGL ES only draws through a geometry shader of its
 own, keep the first vertex, as does a fragment shader that reads the
 primitive ID.
 
+Whether the geometry shader takes lines or triangles goes into the
+pipeline hash, which has no topology of its own: without it a lines
+pipeline got the cached geometry shader of a triangles pipeline with the
+same shaders, and drew wrong flat values (dEQP-GLES3
+transform_feedback.basic_types.interleaved lines and triangles with
+lowp and mediump uvec4, which reuse one program).
+
 dEQP-VK.rasterization.provoking_vertex.draw: 28 of 36 pass on a UHD 770
 and an Iris Plus 650, up from 18; the 8 left are the adjacency topologies.
 
@@ -289,7 +296,7 @@ index 3570388..f194f81 100644
 +
  #endif
 diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
-index 59942c8..bef9948 100644
+index 59942c8..0ddae85 100644
 --- a/src/microsoft/vulkan/dzn_pipeline.c
 +++ b/src/microsoft/vulkan/dzn_pipeline.c
 @@ -1156,6 +1156,39 @@ dzn_graphics_pipeline_fs_provoking_vertex(const struct dzn_physical_device *pdev
@@ -332,17 +339,32 @@ index 59942c8..bef9948 100644
  static VkResult
  dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
                                        struct dzn_graphics_pipeline *pipeline,
-@@ -1254,6 +1287,9 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+@@ -1254,6 +1287,16 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
  
     uint8_t fs_provoking_vertex =
        dzn_graphics_pipeline_fs_provoking_vertex(pdev, info, last_raster_stage);
 +   bool flat_vertex_gs =
 +      !pipeline->use_gs_for_polygon_mode_point && !lower_view_index &&
 +      dzn_graphics_pipeline_wants_flat_vertex_gs(pdev, info, last_raster_stage);
++   /* The geometry shader takes lines or triangles. The pipeline hash has no
++    * topology of its own, so it takes this, or a lines pipeline would get the
++    * cached geometry shader of a triangles one with the same shaders. */
++   bool flat_vertex_gs_lines =
++      flat_vertex_gs &&
++      to_prim_topology_type(info->pInputAssemblyState->topology) ==
++      D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
  
     if (cache) {
        dzn_graphics_pipeline_hash_attribs(attribs, vi_conversions, attribs_hash);
-@@ -1270,6 +1306,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+@@ -1262,6 +1305,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+ 
+       _mesa_blake3_init(&pipeline_hash_ctx);
+       _mesa_blake3_update(&pipeline_hash_ctx, &device->bindless, sizeof(device->bindless));
++      _mesa_blake3_update(&pipeline_hash_ctx, &flat_vertex_gs_lines, sizeof(flat_vertex_gs_lines));
+       _mesa_blake3_update(&pipeline_hash_ctx, attribs_hash, sizeof(attribs_hash));
+       _mesa_blake3_update(&pipeline_hash_ctx, &yz_flip_mode, sizeof(yz_flip_mode));
+       _mesa_blake3_update(&pipeline_hash_ctx, &y_flip_mask, sizeof(y_flip_mask));
+@@ -1270,6 +1314,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
        _mesa_blake3_update(&pipeline_hash_ctx, &lower_view_index, sizeof(lower_view_index));
        _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->use_gs_for_polygon_mode_point, sizeof(pipeline->use_gs_for_polygon_mode_point));
        _mesa_blake3_update(&pipeline_hash_ctx, &fs_provoking_vertex, sizeof(fs_provoking_vertex));
@@ -350,13 +372,12 @@ index 59942c8..bef9948 100644
  
        u_foreach_bit(stage, active_stage_mask) {
           const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroup_size_info =
-@@ -1357,6 +1394,34 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+@@ -1357,6 +1402,33 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
           pipeline->needs_draw_sysvals = metadata.needs_draw_sysvals;
     }
  
 +   if (flat_vertex_gs && (active_stage_mask & BITFIELD_BIT(MESA_SHADER_FRAGMENT))) {
-+      bool lines = to_prim_topology_type(info->pInputAssemblyState->topology) ==
-+                   D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
++      bool lines = flat_vertex_gs_lines;
 +      nir_shader *gs =
 +         dzn_nir_flat_vertex_gs(pipeline->templates.shaders[MESA_SHADER_VERTEX].nir,
 +                                pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir,

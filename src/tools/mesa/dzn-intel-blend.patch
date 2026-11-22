@@ -21,6 +21,12 @@ mask, or the format has none (R8G8, R16, R5G6B5 and the like). On Intel,
 alpha factors of a blend that does not write alpha are ONE and ZERO, and
 they do not count when deciding on the constants above.
 
+In the same way colour factors count only when the blend writes a colour
+channel, and on Intel they are ONE and ZERO when it writes none: the
+driver got a blend wrong that writes only alpha and whose colour factor
+took the constant as SRC1 (dEQP-GLES3
+fragment_ops.interaction.basic_shader.38).
+
 A fragment shader that already writes a second output the blend does not
 use gets the constants in that output.
 
@@ -179,10 +185,10 @@ index f194f81..990a6be 100644
  dzn_nir_flat_vertex_gs(const nir_shader *vs, const nir_shader *fs, bool lines,
                         uint32_t runtime_data_register_space,
 diff --git a/src/microsoft/vulkan/dzn_pipeline.c b/src/microsoft/vulkan/dzn_pipeline.c
-index bef9948..5559586 100644
+index 0ddae85..5eb67fd 100644
 --- a/src/microsoft/vulkan/dzn_pipeline.c
 +++ b/src/microsoft/vulkan/dzn_pipeline.c
-@@ -1307,6 +1307,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+@@ -1315,6 +1315,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
        _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->use_gs_for_polygon_mode_point, sizeof(pipeline->use_gs_for_polygon_mode_point));
        _mesa_blake3_update(&pipeline_hash_ctx, &fs_provoking_vertex, sizeof(fs_provoking_vertex));
        _mesa_blake3_update(&pipeline_hash_ctx, &flat_vertex_gs, sizeof(flat_vertex_gs));
@@ -190,7 +196,7 @@ index bef9948..5559586 100644
  
        u_foreach_bit(stage, active_stage_mask) {
           const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroup_size_info =
-@@ -1357,8 +1358,10 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+@@ -1365,8 +1366,10 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
           }
           if (stage == MESA_SHADER_VERTEX)
              _mesa_blake3_update(&nir_hash_ctx, attribs_hash, sizeof(attribs_hash));
@@ -202,7 +208,7 @@ index bef9948..5559586 100644
           if (stage == last_raster_stage) {
              _mesa_blake3_update(&nir_hash_ctx, &yz_flip_mode, sizeof(yz_flip_mode));
              _mesa_blake3_update(&nir_hash_ctx, &y_flip_mask, sizeof(y_flip_mask));
-@@ -1394,6 +1397,10 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
+@@ -1402,6 +1405,10 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
           pipeline->needs_draw_sysvals = metadata.needs_draw_sysvals;
     }
  
@@ -211,9 +217,9 @@ index bef9948..5559586 100644
 +                                         DZN_REGISTER_SPACE_SYSVALS, 0);
 +
     if (flat_vertex_gs && (active_stage_mask & BITFIELD_BIT(MESA_SHADER_FRAGMENT))) {
-       bool lines = to_prim_topology_type(info->pInputAssemblyState->topology) ==
-                    D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
-@@ -2273,10 +2280,83 @@ translate_logic_op(VkLogicOp in)
+       bool lines = flat_vertex_gs_lines;
+       nir_shader *gs =
+@@ -2280,10 +2287,92 @@ translate_logic_op(VkLogicOp in)
     }
  }
  
@@ -255,6 +261,14 @@ index bef9948..5559586 100644
 +           util_format_has_alpha(vk_format_to_pipe_format(format)));
 +}
 +
++/* Whether a blend writes a colour channel: colour factors count only then. */
++static bool
++dzn_blend_writes_color(const VkPipelineColorBlendAttachmentState *att)
++{
++   return att->colorWriteMask &
++          (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT);
++}
++
 +/* Intel's Direct3D 12 driver for 12th-generation and newer GPUs (32.0.101.7092
 + * on a UHD 770 under WSL2) ignores the blend factor (OMSetBlendFactor): it
 + * blends with each colour channel rounded to 0 or 1 and an alpha of 0. Where
@@ -277,9 +291,10 @@ index bef9948..5559586 100644
 +      att->srcColorBlendFactor, att->dstColorBlendFactor,
 +      att->srcAlphaBlendFactor, att->dstAlphaBlendFactor,
 +   };
++   unsigned first = dzn_blend_writes_color(att) ? 0 : 2;
 +   unsigned count = dzn_blend_writes_alpha(att, format) ? 4 : 2;
 +   bool constant = false;
-+   for (unsigned i = 0; i < count; i++) {
++   for (unsigned i = first; i < count; i++) {
 +      if (is_dual_source_blend_factor(factors[i]))
 +         return false;
 +      constant |= is_constant_color_blend_factor(factors[i]) ||
@@ -298,7 +313,7 @@ index bef9948..5559586 100644
  {
     const VkPipelineColorBlendStateCreateInfo *in_blend =
        dzn_graphics_pipeline_static_rast_discard(pipeline, in) ? NULL : in->pColorBlendState;
-@@ -2300,6 +2380,11 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+@@ -2307,6 +2396,11 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
     desc->AlphaToCoverageEnable = in_ms->alphaToCoverageEnable;
     memcpy(pipeline->blend.constants, in_blend->blendConstants,
            sizeof(pipeline->blend.constants));
@@ -310,7 +325,7 @@ index bef9948..5559586 100644
  
     for (uint32_t i = 0; i < in_blend->attachmentCount; i++) {
        if (i > 0 &&
-@@ -2317,15 +2402,15 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+@@ -2324,15 +2418,15 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
           desc->RenderTarget[i].LogicOp = logicop;
        } else {
           desc->RenderTarget[i].SrcBlend =
@@ -330,7 +345,7 @@ index bef9948..5559586 100644
           desc->RenderTarget[i].BlendOpAlpha =
              translate_blend_op(in_blend->pAttachments[i].alphaBlendOp);
  
-@@ -2339,6 +2424,18 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
+@@ -2346,6 +2440,26 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
               desc->RenderTarget[i].BlendOpAlpha == D3D12_BLEND_OP_MAX)
              desc->RenderTarget[i].SrcBlendAlpha = desc->RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ONE;
  
@@ -345,11 +360,19 @@ index bef9948..5559586 100644
 +            desc->RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ZERO;
 +            desc->RenderTarget[i].BlendOpAlpha = D3D12_BLEND_OP_ADD;
 +         }
++         /* The same for colour factors that write nothing: the colour
++          * channels are all out of the write mask. */
++         if (pdev->desc.vendor_id == 0x8086 &&
++             !dzn_blend_writes_color(&in_blend->pAttachments[i])) {
++            desc->RenderTarget[i].SrcBlend = D3D12_BLEND_ONE;
++            desc->RenderTarget[i].DestBlend = D3D12_BLEND_ZERO;
++            desc->RenderTarget[i].BlendOp = D3D12_BLEND_OP_ADD;
++         }
 +
           const VkPipelineColorBlendAttachmentState *att = &in_blend->pAttachments[i];
           if (att->blendEnable) {
              constant_alpha |= is_constant_alpha_blend_factor(att->srcColorBlendFactor) ||
-@@ -2637,8 +2734,6 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+@@ -2644,8 +2758,6 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
     dzn_graphics_pipeline_translate_rast(device, pipeline, stream_desc, pCreateInfo);
     dzn_graphics_pipeline_translate_ms(pipeline, stream_desc, pCreateInfo);
     dzn_graphics_pipeline_translate_zsa(device, pipeline, stream_desc, pCreateInfo);
@@ -358,7 +381,7 @@ index bef9948..5559586 100644
     unsigned view_mask = 0;
     if (pass) {
        const struct vk_subpass *subpass = &pass->subpasses[pCreateInfo->subpass];
-@@ -2716,6 +2811,9 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
+@@ -2723,6 +2835,9 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
        pipeline->multiview.native_view_instancing = true;
     }
  
