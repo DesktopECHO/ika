@@ -48,6 +48,29 @@ OpenGL ES only, Android has no Vulkan driver and declares no Vulkan features.
 Ika's ROM installs each guest Vulkan driver as its own package, and the host
 tools activate the one the guest loads and select the matching version.
 
+### How Android composes the screen
+
+Android's compositor, SurfaceFlinger, hands each window's buffer to the host
+to put together when it can. When it cannot, it draws them into one buffer
+itself with RenderEngine. That is every frame while a window with a frame is
+on the desktop, and also screenshots, screen recordings, blur and color
+corrections such as color inversion. RenderEngine draws with Skia, on Vulkan
+or on OpenGL ES:
+
+| Mode | RenderEngine |
+| --- | --- |
+| `venus`, `honeykrisp`, `gfxstream_guest_angle`, `gfxstream_guest_angle_host_lavapipe`, `guest_lavapipe` | Skia on Vulkan, straight to the guest's Vulkan driver |
+| `gfxstream` | Skia on OpenGL ES, which gfxstream sends to the host's OpenGL driver; Vulkan is optional there |
+| `guest_swiftshader`, `gfxstream_guest_angle_host_swiftshader` | Skia on OpenGL ES through ANGLE: Android's apps draw with OpenGL ES there too |
+
+On Vulkan, RenderEngine's frames skip ANGLE, which OpenGL ES goes through
+in these modes. With a Settings window scrolling on the desktop in the
+`gfxstream_guest_angle` mode, RenderEngine takes 3.4 ms a frame on Vulkan and
+7.5 ms on OpenGL ES on an Intel HD 6000 (Broadwell), 6.5 ms and 36 ms on a
+Kaby Lake GPU under WSL2, and 0.3 ms and 3.2 ms on an M1 Pro.
+`ika adb shell dumpsys SurfaceFlinger` names the one in use:
+`RE Vulkan (Ganesh)` or `RE GLES (Ganesh)`.
+
 ### How Ika chooses
 
 With `gpu_mode` at `auto`, the default, `ika start` looks at the host's

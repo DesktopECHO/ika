@@ -436,8 +436,16 @@ Result<std::unordered_map<std::string, std::string>> BootconfigArgsFromConfig(
                                        : "vulkan_1_1";
   }
 
+  // SurfaceFlinger's RenderEngine composites with Skia on Vulkan wherever the
+  // guest's Vulkan driver runs on a GPU or lavapipe. On gfxstream_guest_angle
+  // and its host lavapipe variant that skips ANGLE for every composited frame,
+  // as HWUI already does there. SkiaGL stays for gfxstream (OpenGL ES straight
+  // to the host, Vulkan optional), guest SwiftShader and gfxstream over host
+  // SwiftShader, whose single queue HWUI does not use Vulkan on either.
   if (gpu_mode == GpuMode::GuestLavapipe || gpu_mode == GpuMode::Venus ||
-      gpu_mode == GpuMode::Honeykrisp) {
+      gpu_mode == GpuMode::Honeykrisp ||
+      gpu_mode == GpuMode::GfxstreamGuestAngle ||
+      gpu_mode == GpuMode::GfxstreamGuestAngleHostLavapipe) {
     bootconfig_args["androidboot.hardware.guest_renderengine_backend"] =
         "skiavkthreaded";
   }
