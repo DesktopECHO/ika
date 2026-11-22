@@ -5,23 +5,29 @@ metadata up to date when CopyTextureRegion writes the texture: a shader
 sampling it afterwards reads stale values in bands of rows. dEQP-GLES3
 texture.shadow, whose depth textures ANGLE uploads with
 vkCmdCopyBufferToImage, failed 131 of 432 cases on a UHD 770 under WSL2,
-and a different set on each run (the 2d.nearest.less_or_equal_depth24_stencil8
-case 5 runs in 8), as did the Iris Plus 650 of a Kaby Lake; 32-bit float
-depth textures and the RTX 4080 of the same laptop never failed. Dawn works
-around the same bug on Intel's Gen9, Gen12 and Xe GPUs by clearing
-depth-stencil textures before a copy writes them.
+and a different set on each run (the
+2d.nearest.less_or_equal_depth24_stencil8 case 5 runs in 8), as did the
+Iris Plus 650 of a Kaby Lake; 32-bit float depth textures and the RTX
+4080 of the same laptop never failed. Dawn works around the same bug on
+Intel's Gen9, Gen12 and Xe GPUs by clearing depth-stencil textures
+before a copy writes them.
 
 On Intel, a copy from a buffer or an image to a single-sampled
 depth-stencil texture clears the depth or stencil plane it writes first;
-such copies always write whole planes. Multisampled textures are left out:
-on the Iris Plus 650 a copy into a cleared one kept the cleared values
-(dEQP-VK depth_stencil_msaa_copy).
+such copies always write whole planes. The UHD 770's driver applies a
+pending clear at every later copy into the texture, to all its mip
+levels, so of a D24S8 texture with several levels only the last level
+copied kept its data (108 dEQP-VK.texture.shadow.2d cases of D24S8,
+D32S8 and X8_D24 failed); moving the plane through a read layout right
+after the clear makes the driver apply it then. Multisampled textures
+are left out: on the Iris Plus 650 a copy into a cleared one kept the
+cleared values (dEQP-VK depth_stencil_msaa_copy).
 
 diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
-index cc3d7f9..74f6868 100644
+index cc3d7f9..7af3aa3 100644
 --- a/src/microsoft/vulkan/dzn_cmd_buffer.c
 +++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
-@@ -2967,6 +2967,42 @@ dzn_cmd_buffer_clear_zs(struct dzn_cmd_buffer *cmdbuf,
+@@ -2967,6 +2967,67 @@ dzn_cmd_buffer_clear_zs(struct dzn_cmd_buffer *cmdbuf,
     }
  }
  
@@ -31,6 +37,13 @@ index cc3d7f9..74f6868 100644
 + * lookups on a UHD 770 and an Iris Plus 650 under WSL2 failed now and then.
 + * Dawn works around the same bug on Intel GPUs by clearing such textures
 + * before a copy writes them. Clear the plane a copy is about to write whole.
++ *
++ * The UHD 770's driver applies a clear it has not yet applied at every
++ * later copy into the texture, to all its mip levels: of a D24S8 texture
++ * with several levels only the last level copied kept its data. Moving
++ * the plane through a read layout right after the clear makes the driver
++ * apply it then.
++ *
 + * Not multisampled textures: on an Iris Plus 650 a copy into a cleared one
 + * kept the cleared values.
 + */
@@ -59,12 +72,30 @@ index cc3d7f9..74f6868 100644
 +      .layerCount = 1,
 +   };
 +   dzn_cmd_buffer_clear_zs(cmdbuf, image, layout, &zs, 1, &range);
++
++   if (cmdbuf->enhanced_barriers) {
++      D3D12_BARRIER_LAYOUT restore_layout =
++         dzn_cmd_buffer_require_layout(cmdbuf, image, layout,
++                                       D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_GENERIC_READ,
++                                       &range);
++      dzn_cmd_buffer_restore_layout(cmdbuf, image,
++                                    D3D12_BARRIER_SYNC_ALL, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
++                                    D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_GENERIC_READ,
++                                    restore_layout, &range);
++   } else {
++      dzn_cmd_buffer_queue_image_range_layout_transition(cmdbuf, image, &range, layout,
++                                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
++                                                         DZN_QUEUE_TRANSITION_FLUSH);
++      dzn_cmd_buffer_queue_image_range_layout_transition(cmdbuf, image, &range,
++                                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
++                                                         layout, DZN_QUEUE_TRANSITION_FLUSH);
++   }
 +}
 +
  /* D3D12 copies depth-stencil resources only as whole subresources. Read the
   * whole plane into a temporary buffer, build a second one with the new rows
   * in it, then copy that one back to the image.
-@@ -3099,6 +3135,8 @@ dzn_cmd_buffer_copy_partial_ds_buf2img(struct dzn_cmd_buffer *cmdbuf,
+@@ -3099,6 +3160,8 @@ dzn_cmd_buffer_copy_partial_ds_buf2img(struct dzn_cmd_buffer *cmdbuf,
                                                 DZN_QUEUE_TRANSITION_FLUSH);
     }
  
@@ -73,7 +104,7 @@ index cc3d7f9..74f6868 100644
     ID3D12GraphicsCommandList1_CopyTextureRegion(cmdbuf->cmdlist, dst_img_loc, 0, 0, 0,
                                                  &new_loc, NULL);
  }
-@@ -3144,6 +3182,9 @@ dzn_cmd_buffer_copy_buf2img_region(struct dzn_cmd_buffer *cmdbuf,
+@@ -3144,6 +3207,9 @@ dzn_cmd_buffer_copy_buf2img_region(struct dzn_cmd_buffer *cmdbuf,
        return;
     }
  
@@ -83,7 +114,7 @@ index cc3d7f9..74f6868 100644
     /* Footprint slices are RowPitch * Height apart, so a larger
      * bufferImageHeight needs the line-by-line copy.
      */
-@@ -5359,8 +5400,12 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
+@@ -5359,8 +5425,12 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
        const VkImageCopy2 *region = &info->pRegions[i];
  
        dzn_foreach_aspect(aspect, region->srcSubresource.aspectMask) {
