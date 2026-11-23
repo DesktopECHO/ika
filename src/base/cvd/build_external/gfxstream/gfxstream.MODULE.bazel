@@ -132,5 +132,8 @@ git_repository(
         "@//build_external/gfxstream:PATCH.gfxstream.decompression-layer-views.patch",
         # ASTC data the CPU cannot decode stays undecoded where there is no GPU decoder.
         "@//build_external/gfxstream:PATCH.gfxstream.astc-undecoded-no-gpu-decoder.patch",
+        # A guest app whose VkDevice was lost is torn down when it exits instead
+        # of aborting in ~ExternalFencePool.
+        "@//build_external/gfxstream:PATCH.gfxstream.lost-device-teardown.patch",
     ],
 )

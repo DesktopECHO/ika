@@ -1,0 +1,140 @@
+Patch summary:
+A guest app whose VkDevice was lost no longer ends the VM when it exits.
+survive-guest-device-loss keeps gfxstream running when a guest device is
+lost, but its teardown still failed: vkDeviceWaitIdle returns
+VK_ERROR_DEVICE_LOST, destroyDeviceObjects then skipped destroying the
+device's objects, and when the DeviceInfo went, ~ExternalFencePool found
+the fences the guest had returned to the pool and called GFXSTREAM_FATAL.
+
+- destroyDeviceObjects destroys a lost device's objects and the device
+  (Vulkan allows it: a lost device runs no more work). Other
+  vkDeviceWaitIdle failures still leave the device alone.
+- ~ExternalFencePool destroys the fences left in it, which happens only when
+  the device was left alive, instead of aborting.
+- ExternalFencePool::pop() passes over a fence whose status is
+  VK_ERROR_DEVICE_LOST, and its fence reset tolerates a lost device.
+DSA (desktop-subsystem-for-android) fixes the same teardown in its patch 0015.
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index b519ace1..4a3fbbb9 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -12807,7 +12807,15 @@ class VkDecoderGlobalState::Impl {
+             // https://bugs.chromium.org/p/chromium/issues/detail?id=1074600
+             // it's important to idle the device before destroying it!
+             VkResult res = deviceDispatch->vkDeviceWaitIdle(device);
+-            if (res != VK_SUCCESS) {
++            if (res == VK_ERROR_DEVICE_LOST) {
++                // A lost device runs no more work, and Vulkan allows destroying every
++                // object of it, the device included. Leaving them would leak the device's
++                // memory and leave its external fence pool full, which aborts in
++                // ~ExternalFencePool when the DeviceInfo goes.
++                GFXSTREAM_WARNING(
++                    "VkDevice:%p was lost; destroying its objects without waiting for it.",
++                    device);
++            } else if (res != VK_SUCCESS) {
+                 // Something went wrong.. Skip destroying the vulkan objects of the device
+                 // to avoid further issues.
+                 GFXSTREAM_ERROR(
+diff --git a/host/vulkan/vk_decoder_internal_structs.h b/host/vulkan/vk_decoder_internal_structs.h
+index 097646b2..93c61a0b 100644
+--- a/host/vulkan/vk_decoder_internal_structs.h
++++ b/host/vulkan/vk_decoder_internal_structs.h
+@@ -63,10 +63,15 @@ class ExternalFencePool {
+         : m_vk(dispatch), mDevice(device), mMaxSize(5) {}
+ 
+     ~ExternalFencePool() {
++        // The device's normal teardown drains the pool before vkDestroyDevice. Fences are
++        // left only when the device itself was left alive (its vkDeviceWaitIdle failed),
++        // so they can still be destroyed here.
+         if (!mPool.empty()) {
+-            GFXSTREAM_FATAL(
+-                "External fence pool for VkDevice:%p destroyed but %zu fences still not destroyed.",
+-                mDevice, mPool.size());
++            GFXSTREAM_WARNING("External fence pool for VkDevice:%p still holds %zu fences.",
++                              mDevice, mPool.size());
++            for (VkFence fence : mPool) {
++                m_vk->vkDestroyFence(mDevice, fence, nullptr);
++            }
+         }
+     }
+ 
+@@ -92,7 +97,9 @@ class ExternalFencePool {
+                 }
+                 VkResult status = m_vk->vkGetFenceStatus(mDevice, fence);
+                 if (status != VK_SUCCESS) {
+-                    if (status != VK_NOT_READY) {
++                    // A fence of a lost device is never handed out again; the device's
++                    // teardown destroys it.
++                    if (status != VK_NOT_READY && status != VK_ERROR_DEVICE_LOST) {
+                         VK_CHECK(status);
+                     }
+ 
+@@ -110,7 +117,7 @@ class ExternalFencePool {
+         }
+ 
+         if (!(pCreateInfo->flags & VK_FENCE_CREATE_SIGNALED_BIT)) {
+-            VK_CHECK(m_vk->vkResetFences(mDevice, 1, &fence));
++            VK_CHECK_GUEST_DEVICE(m_vk->vkResetFences(mDevice, 1, &fence));
+         }
+ 
+         return fence;
+diff --git a/host/vulkan/vk_decoder_internal_structs_tests.cpp b/host/vulkan/vk_decoder_internal_structs_tests.cpp
+index d65e6406..9b5e47f3 100644
+--- a/host/vulkan/vk_decoder_internal_structs_tests.cpp
++++ b/host/vulkan/vk_decoder_internal_structs_tests.cpp
+@@ -39,6 +39,9 @@ protected:
+                     vkResetFences,
+                     (VkDevice device, uint32_t numFences, const VkFence* fence),
+                     ());
++        MOCK_METHOD(void, vkDestroyFence,
++                    (VkDevice device, VkFence fence, const VkAllocationCallbacks* allocator),
++                    ());
+     };
+ 
+     ExternalFencePoolTest()
+@@ -53,8 +56,6 @@ protected:
+     ExternalFencePool<MockDispatch> mPool;
+ };
+ 
+-using ExternalFencePoolDeathTest = ExternalFencePoolTest;
+-
+ TEST_F(ExternalFencePoolTest, poolNoDeviceFences) {
+     VkFenceCreateInfo createInfo{
+         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+@@ -155,16 +156,26 @@ TEST_F(ExternalFencePoolTest, poolPopAll) {
+     ASSERT_THAT(result, UnorderedElementsAre(fence1, fence2, fence3));
+ }
+ 
+-TEST_F(ExternalFencePoolDeathTest, undestroyedFences) {
+-    ASSERT_DEATH(
+-        {
+-            ExternalFencePool<MockDispatch> pool(&mMockDispatch, mDevice);
+-            VkFence fence = reinterpret_cast<VkFence>(0x1234'0000);
+-            pool.add(fence);
+-        },
+-        MatchesStdRegex(
+-            "External fence pool for VkDevice:0000000022220000|0x22220000 destroyed but 1 "
+-            "fences still not destroyed."));
++TEST_F(ExternalFencePoolTest, destroysFencesLeftInThePool) {
++    VkFence fence = reinterpret_cast<VkFence>(0x1234'0000);
++    EXPECT_CALL(mMockDispatch, vkDestroyFence(mDevice, fence, nullptr)).Times(1);
++    {
++        ExternalFencePool<MockDispatch> pool(&mMockDispatch, mDevice);
++        pool.add(fence);
++    }
++}
++
++TEST_F(ExternalFencePoolTest, poolSkipsFenceOfLostDevice) {
++    VkFenceCreateInfo createInfo{
++        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
++        .pNext = 0,
++        .flags = 0,
++    };
++    VkFence fence = reinterpret_cast<VkFence>(0x1234'0000);
++    mPool.add(fence);
++    EXPECT_CALL(mMockDispatch, vkGetFenceStatus(_, fence))
++        .WillOnce(Return(VK_ERROR_DEVICE_LOST));
++    ASSERT_EQ(VK_NULL_HANDLE, mPool.pop(&createInfo));
+ }
+ 
+ TEST(VkDecoderGlobalStateDescriptorUpdateTemplateTest, linearizedEntriesSkipWholeArrays) {
