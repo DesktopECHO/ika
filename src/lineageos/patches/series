@@ -115,6 +115,7 @@ frameworks/native patches/frameworks-native-logspam.patch
 frameworks/native patches/frameworks-native-vulkan-profile-timestamps.patch
 frameworks/native patches/frameworks-native-a17-hotplug-renderengine.patch
 frameworks/native patches/frameworks-native-vulkan-skip-bridged-layers.patch
+frameworks/native patches/frameworks-native-renderengine-unimportable-buffer.patch
 # frameworks/base is patched twice on purpose: the first patch is the generic
 # desktop framework changes (DesktopExperienceFlags, SettingsProvider seed, QS
 # changes); the second is the native-bridge-only changes (NativeLibraryHelper,

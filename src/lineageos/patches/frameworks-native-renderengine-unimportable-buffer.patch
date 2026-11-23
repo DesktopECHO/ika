@@ -1,0 +1,138 @@
+Patch summary:
+RenderEngine no longer ends SurfaceFlinger when a buffer cannot be imported
+as a texture. GaneshBackendTexture aborted ("Failed to create a valid
+texture") whenever the driver could not wrap an AHardwareBuffer, so one bad
+buffer from one app restarted SurfaceFlinger and every app with it; Ika has
+hit this on virtual GPUs twice (H.264 frames under Venus on Intel, and a
+Vulkan RenderEngine missing import extensions). Now:
+- such a texture is logged and stays invalid; makeImage() and makeSurface()
+  return nothing for it instead of asking Skia (a buffer with no size is
+  still fatal, as that is a programming error);
+- AutoBackendTexture takes a reference only for an image or surface that
+  was made, since Skia calls no release proc for one that was not;
+- drawLayersInternal leaves a layer without a texture out of the frame and
+  fails the composition (BAD_VALUE) when the output buffer has none, and the
+  gainmap path fails the same way.
+DSA (desktop-subsystem-for-android) makes the same change in its
+frameworks/native patch 0005.
+
+diff --git a/libs/renderengine/skia/AutoBackendTexture.cpp b/libs/renderengine/skia/AutoBackendTexture.cpp
+index 84357f1..ffefaa2 100644
+--- a/libs/renderengine/skia/AutoBackendTexture.cpp
++++ b/libs/renderengine/skia/AutoBackendTexture.cpp
+@@ -64,8 +64,11 @@ sk_sp<SkImage> AutoBackendTexture::makeImage(ui::Dataspace dataspace, SkAlphaTyp
+     SFTRACE_CALL();
+ 
+     sk_sp<SkImage> image = mBackendTexture->makeImage(alphaType, dataspace, releaseImageProc, this);
+-    // The following ref will be counteracted by releaseProc, when SkImage is discarded.
+-    ref();
++    // The following ref will be counteracted by releaseProc, when SkImage is discarded. A
++    // texture the driver could not import makes no image, and so no releaseProc call.
++    if (image) {
++        ref();
++    }
+ 
+     mImage = image;
+     mDataspace = dataspace;
+@@ -80,7 +83,10 @@ sk_sp<SkSurface> AutoBackendTexture::getOrCreateSurface(ui::Dataspace dataspace)
+         sk_sp<SkSurface> surface =
+                 mBackendTexture->makeSurface(dataspace, releaseSurfaceProc, this);
+         // The following ref will be counteracted by releaseProc, when SkSurface is discarded.
+-        ref();
++        // A texture the driver could not import makes no surface, and so no releaseProc call.
++        if (surface) {
++            ref();
++        }
+ 
+         mSurface = surface;
+     }
+diff --git a/libs/renderengine/skia/SkiaRenderEngine.cpp b/libs/renderengine/skia/SkiaRenderEngine.cpp
+index 744d6c2..238c1ca 100644
+--- a/libs/renderengine/skia/SkiaRenderEngine.cpp
++++ b/libs/renderengine/skia/SkiaRenderEngine.cpp
+@@ -818,6 +818,11 @@ void SkiaRenderEngine::drawLayersInternal(
+     waitFenceIfPending(context, bufferFence);
+ 
+     sk_sp<SkSurface> dstSurface = surfaceTextureRef->getOrCreateSurface(display.outputDataspace);
++    if (!dstSurface) {
++        ALOGE("Cannot render into the output buffer. Aborting GPU composition.");
++        resultPromise->set_value(base::unexpected(BAD_VALUE));
++        return;
++    }
+ 
+     SkCanvas* dstCanvas = mCapture->tryCapture(dstSurface.get());
+     if (dstCanvas == nullptr) {
+@@ -1194,6 +1199,11 @@ void SkiaRenderEngine::drawLayersInternal(
+                     : item.usePremultipliedAlpha         ? kPremul_SkAlphaType
+                                                          : kUnpremul_SkAlphaType;
+             sk_sp<SkImage> image = imageTextureRef->makeImage(layerDataspace, alphaType);
++            if (!image) {
++                // The layer's buffer could not be imported: leave the layer out of this frame.
++                ALOGW("Skipping layer %s: its buffer has no texture.", layer.name.c_str());
++                continue;
++            }
+ 
+             auto texMatrix = getSkM44(item.textureTransform).asM33();
+             // textureTansform was intended to be passed directly into a shader, so when
+@@ -1407,6 +1417,11 @@ void SkiaRenderEngine::tonemapAndDrawGainmapInternal(
+     waitFenceIfPending(context, hdrFence);
+     const auto hdrTextureRef = getOrCreateBackendTexture(hdr->getBuffer(), false);
+     const auto hdrImage = hdrTextureRef->makeImage(dataspace, kPremul_SkAlphaType);
++    if (!gainmapSurface || !sdrSurface || !hdrImage) {
++        ALOGE("Cannot tonemap: a buffer has no texture.");
++        resultPromise->set_value(base::unexpected(BAD_VALUE));
++        return;
++    }
+     const auto hdrShader =
+             hdrImage->makeShader(SkTileMode::kClamp, SkTileMode::kClamp,
+                                  SkSamplingOptions({SkFilterMode::kNearest, SkMipmapMode::kNone}),
+diff --git a/libs/renderengine/skia/compat/GaneshBackendTexture.cpp b/libs/renderengine/skia/compat/GaneshBackendTexture.cpp
+index d4a075d..0e28751 100644
+--- a/libs/renderengine/skia/compat/GaneshBackendTexture.cpp
++++ b/libs/renderengine/skia/compat/GaneshBackendTexture.cpp
+@@ -67,12 +67,21 @@ GaneshBackendTexture::GaneshBackendTexture(sk_sp<GrDirectContext> grContext,
+         LOG_ALWAYS_FATAL("Unexpected graphics API %u", static_cast<unsigned>(graphicsApi));
+     }
+ 
+-    if (!mBackendTexture.isValid() || !desc.width || !desc.height) {
++    if (!desc.width || !desc.height) {
+         LOG_ALWAYS_FATAL("Failed to create a valid texture. [%p]:[%d,%d] isProtected:%d "
+                          "isWriteable:%d format:%d",
+                          this, desc.width, desc.height, createProtectedImage, isOutputBuffer,
+                          desc.format);
+     }
++    if (!mBackendTexture.isValid()) {
++        // The driver could not import this one buffer (a virtual GPU whose host no longer
++        // knows it, an allocation the GPU cannot sample): makeImage() and makeSurface() give
++        // nothing for it, and the layer or frame that uses it is left out, instead of
++        // SurfaceFlinger, and with it every app, restarting.
++        ALOGE("Failed to create a valid texture. [%p]:[%d,%d] isProtected:%d isWriteable:%d "
++              "format:%d",
++              this, desc.width, desc.height, createProtectedImage, isOutputBuffer, desc.format);
++    }
+ }
+ 
+ GaneshBackendTexture::~GaneshBackendTexture() {
+@@ -85,9 +94,10 @@ GaneshBackendTexture::~GaneshBackendTexture() {
+ sk_sp<SkImage> GaneshBackendTexture::makeImage(SkAlphaType alphaType, ui::Dataspace dataspace,
+                                                TextureReleaseProc releaseImageProc,
+                                                ReleaseContext releaseContext) {
+-    if (mBackendTexture.isValid()) {
+-        mUpdateProc(mImageCtx, mGrContext.get());
++    if (!mBackendTexture.isValid()) {
++        return nullptr;
+     }
++    mUpdateProc(mImageCtx, mGrContext.get());
+ 
+     const SkColorType colorType = colorTypeForImage(alphaType);
+     sk_sp<SkImage> image =
+@@ -103,6 +113,9 @@ sk_sp<SkImage> GaneshBackendTexture::makeImage(SkAlphaType alphaType, ui::Datasp
+ sk_sp<SkSurface> GaneshBackendTexture::makeSurface(ui::Dataspace dataspace,
+                                                    TextureReleaseProc releaseSurfaceProc,
+                                                    ReleaseContext releaseContext) {
++    if (!mBackendTexture.isValid()) {
++        return nullptr;
++    }
+     const SkColorType colorType = internalColorType();
+     sk_sp<SkSurface> surface =
+             SkSurfaces::WrapBackendTexture(mGrContext.get(), mBackendTexture,
