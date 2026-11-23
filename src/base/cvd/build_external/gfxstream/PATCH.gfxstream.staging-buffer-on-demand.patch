@@ -1,0 +1,206 @@
+Patch summary:
+The ColorBuffer staging buffer is made at its first use, at the size the
+transfer needs (in 8 MiB steps), instead of 128 MiB of host-visible memory
+at start. It grows when a larger transfer comes, up to the old 128 MiB
+limit. Under WSL2 every byte of it was committed Windows memory for the
+whole session; most hosts never copy more than one display-sized
+ColorBuffer at once.
+The staging memory is also treated as coherent only when its type is
+HOST_COHERENT; the flag used to be set from HOST_VISIBLE, so non-coherent
+staging memory was never flushed or invalidated.
+DSA (desktop-subsystem-for-android) defers the same buffer in its patch 0026.
+diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
+index 67fc4f69..5de12398 100644
+--- a/host/vulkan/vk_common_operations.cpp
++++ b/host/vulkan/vk_common_operations.cpp
+@@ -351,7 +351,7 @@ bool VkEmulation::StagingBuffer::create(VulkanDispatch* vk, VkDevice device,
+     }
+ 
+     // Non-host coherent memory would require manual flush/invalidate
+-    mIsHostCoherent = (memType.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
++    mIsHostCoherent = (memType.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+ 
+     VkMemoryAllocateInfo allocInfo = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+@@ -404,6 +404,28 @@ void VkEmulation::StagingBuffer::destroy(VulkanDispatch* vk, VkDevice device) {
+         vk->vkFreeMemory(device, mMemory, nullptr);
+         mMemory = VK_NULL_HANDLE;
+     }
++    mAllocationSize = 0;
++}
++
++bool VkEmulation::ensureStagingBufferLocked(VkDeviceSize size) {
++    if (mStaging.mBuffer != VK_NULL_HANDLE && size <= mStaging.mAllocationSize) {
++        return true;
++    }
++    if (size > kDefaultStagingBufferSize) {
++        return false;
++    }
++    const VkDeviceSize steps = std::max<VkDeviceSize>(1, (size + kStagingBufferStep - 1) /
++                                                             kStagingBufferStep);
++    const VkDeviceSize newSize = std::min(steps * kStagingBufferStep, kDefaultStagingBufferSize);
++    // Every user of the staging buffer waits for its copy before it returns, so the old
++    // buffer is idle.
++    mStaging.destroy(mDvk, mDevice);
++    if (!mStaging.create(mDvk, mDevice, &mDeviceInfo.memProps, mDebugUtilsHelper, newSize)) {
++        GFXSTREAM_ERROR("Could not make a staging buffer of %" PRIu64 " bytes.", newSize);
++        mStaging.destroy(mDvk, mDevice);
++        return false;
++    }
++    return true;
+ }
+ 
+ ExternalMemory::Mode VkEmulation::getExternalMemoryMode() const {
+@@ -1772,13 +1794,8 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+         emulation->mDeviceLostHelper.enableWithNvidiaDeviceDiagnosticCheckpoints();
+     }
+ 
+-    // Create a staging buffer for color buffer copy/update operations
+-    if (!emulation->mStaging.create(dvk, emulation->mDevice,
+-                                    &emulation->mDeviceInfo.memProps,
+-                                    emulation->mDebugUtilsHelper,
+-                                    kDefaultStagingBufferSize)) {
+-        GFXSTREAM_FATAL("Failed: Could not allocate staging buffer for Vulkan emulation");
+-    }
++    // The staging buffer for color buffer copy/update operations is made at its first use
++    // (ensureStagingBufferLocked()).
+ 
+     emulation->mTransferQueueCommandBufferPool.resize(0);
+ 
+@@ -4282,11 +4299,11 @@ bool VkEmulation::readColorBufferToBytes(uint32_t colorBufferHandle, std::vector
+         return false;
+     }
+ 
+-    if (transferInfo.stagingBufferCopySize > mStaging.mAllocationSize) {
++    if (!ensureStagingBufferLocked(transferInfo.stagingBufferCopySize)) {
+         GFXSTREAM_ERROR("Failed to read from ColorBuffer:%d, transfer size %" PRIu64
+                         " too large for staging buffer size:%" PRIu64 ".",
+                         colorBufferHandle, transferInfo.stagingBufferCopySize,
+-                        mStaging.mAllocationSize);
++                        kDefaultStagingBufferSize);
+         return false;
+     }
+ 
+@@ -4353,11 +4370,10 @@ bool VkEmulation::readColorBufferToBytesLocked(uint32_t colorBufferHandle, uint3
+     VkDeviceSize bufferCopySize = transferInfo.stagingBufferCopySize;
+     const std::vector<VkBufferImageCopy>& bufferImageCopies = transferInfo.bufferImageCopies;
+ 
+-    const VkDeviceSize stagingBufferSize = mStaging.mAllocationSize;
+-    if (bufferCopySize > stagingBufferSize) {
++    if (!ensureStagingBufferLocked(bufferCopySize)) {
+         GFXSTREAM_ERROR("Failed to read ColorBuffer:%d, transfer size %" PRIu64
+                         " too large for staging buffer size:%" PRIu64 ".",
+-                        colorBufferHandle, bufferCopySize, stagingBufferSize);
++                        colorBufferHandle, bufferCopySize, kDefaultStagingBufferSize);
+         return false;
+     }
+ 
+@@ -4717,12 +4733,6 @@ bool VkEmulation::readColorBufferPixelsScaledGpu(uint32_t colorBufferHandle, int
+         return false;
+     }
+ 
+-    if (!mStaging.mMappedPtr) {
+-        GFXSTREAM_ERROR("Failed to read from ColorBuffer:%d, staging buffer not mapped.",
+-                        colorBufferHandle);
+-        return false;
+-    }
+-
+     // Check if we need to stage to GPU
+     const int outBpp = (pixelsFormat == GfxstreamFormat::R8G8B8_UNORM) ? 3 : 4;
+     const uint64_t outPixelsSize = (uint64_t)outBpp * (uint64_t)pixelsWidth * (uint64_t)pixelsHeight;
+@@ -4759,11 +4769,11 @@ bool VkEmulation::readColorBufferPixelsScaledGpu(uint32_t colorBufferHandle, int
+     // Verify the staging buffer is large enough for the scaled readback.
+     const VkDeviceSize requiredStagingSize =
+         static_cast<VkDeviceSize>(pixelsWidth) * static_cast<VkDeviceSize>(pixelsHeight) * readbackBpp;
+-    if (requiredStagingSize > mStaging.mAllocationSize) {
++    if (!ensureStagingBufferLocked(requiredStagingSize)) {
+         GFXSTREAM_ERROR(
+             "%s: Failed to read ColorBuffer:%u, transfer size %" PRIu64
+             " too large for staging buffer size:%" PRIu64 ".",
+-            __func__, colorBufferHandle, requiredStagingSize, mStaging.mAllocationSize);
++            __func__, colorBufferHandle, requiredStagingSize, kDefaultStagingBufferSize);
+         return false;
+     }
+ 
+@@ -5157,10 +5167,10 @@ bool VkEmulation::clearColorBuffer(uint32_t colorBufferHandle) {
+     }
+ 
+     VkDeviceSize dstBufferSize = transferInfo.stagingBufferCopySize;
+-    if (dstBufferSize > mStaging.mAllocationSize) {
++    if (dstBufferSize > kDefaultStagingBufferSize) {
+         GFXSTREAM_ERROR("Failed to clear ColorBuffer:%d, transfer size %" PRIu64
+                         " too large for staging buffer size:%" PRIu64 ".",
+-                        colorBufferHandle, dstBufferSize, mStaging.mAllocationSize);
++                        colorBufferHandle, dstBufferSize, kDefaultStagingBufferSize);
+         return false;
+     }
+     const std::vector<uint8_t> clearData(dstBufferSize, 0);
+@@ -5296,11 +5306,10 @@ bool VkEmulation::updateColorBufferFromBytesLocked(uint32_t colorBufferHandle, u
+     VkDeviceSize dstBufferSize = transferInfo.stagingBufferCopySize;
+     const std::vector<VkBufferImageCopy>& bufferImageCopies = transferInfo.bufferImageCopies;
+ 
+-    const VkDeviceSize stagingBufferSize = mStaging.mAllocationSize;
+-    if (dstBufferSize > stagingBufferSize) {
++    if (!ensureStagingBufferLocked(dstBufferSize)) {
+         GFXSTREAM_ERROR("Failed to update ColorBuffer:%d, transfer size %" PRIu64
+                         " too large for staging buffer size:%" PRIu64 ".",
+-                        colorBufferHandle, dstBufferSize, stagingBufferSize);
++                        colorBufferHandle, dstBufferSize, kDefaultStagingBufferSize);
+         return false;
+     }
+ 
+@@ -6095,11 +6104,11 @@ bool VkEmulation::readBufferToBytes(uint32_t bufferHandle, uint64_t offset, uint
+         return true;
+     }
+ 
+-    const auto& stagingBufferInfo = mStaging;
+-    if (size > stagingBufferInfo.mAllocationSize) {
++    if (!ensureStagingBufferLocked(size)) {
+         GFXSTREAM_ERROR("Failed to read from Buffer:%d, staging buffer too small.", bufferHandle);
+         return false;
+     }
++    const auto& stagingBufferInfo = mStaging;
+ 
+     const VkCommandBufferBeginInfo beginInfo = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+@@ -6199,11 +6208,11 @@ bool VkEmulation::updateBufferFromBytes(uint32_t bufferHandle, uint64_t offset,
+         return true;
+     }
+ 
+-    const auto& stagingBufferInfo = mStaging;
+-    if (size > stagingBufferInfo.mAllocationSize) {
++    if (!ensureStagingBufferLocked(size)) {
+         GFXSTREAM_ERROR("Failed to update Buffer:%d, staging buffer too small.", bufferHandle);
+         return false;
+     }
++    const auto& stagingBufferInfo = mStaging;
+ 
+     const void* srcPtr = bytes;
+     const void* srcPtrOffset =
+diff --git a/host/vulkan/vk_common_operations.h b/host/vulkan/vk_common_operations.h
+index 40f13891..25a1d73a 100644
+--- a/host/vulkan/vk_common_operations.h
++++ b/host/vulkan/vk_common_operations.h
+@@ -775,13 +775,20 @@ class VkEmulation {
+     vk_util::YcbcrSamplerPool mYcbcrSamplerPool;
+ 
+     // 128 mb staging buffer (really, just a few 4K frames or one 4k HDR frame)
+-    // ought to be big enough for anybody!
++    // ought to be big enough for anybody! It is the largest the staging buffer grows to.
+     static constexpr VkDeviceSize kDefaultStagingBufferSize = 128ULL * 1048576ULL;
++    // The staging buffer is made at its first use, in steps of this size, and grows only
++    // when a transfer needs more: most hosts never copy more than one display-sized
++    // ColorBuffer at once, and on WSL2 every byte of it is committed Windows memory.
++    static constexpr VkDeviceSize kStagingBufferStep = 8ULL * 1048576ULL;
++
++    // Makes the staging buffer at least `size` bytes; false if it cannot be.
++    bool ensureStagingBufferLocked(VkDeviceSize size) REQUIRES(mMutex);
+ 
+     struct StagingBuffer {
+         VkDeviceMemory mMemory = VK_NULL_HANDLE;
+         VkBuffer mBuffer = VK_NULL_HANDLE;
+-        VkDeviceSize mAllocationSize;
++        VkDeviceSize mAllocationSize = 0;
+         void* mMappedPtr = nullptr;
+         bool mIsHostCoherent = false;
+ 

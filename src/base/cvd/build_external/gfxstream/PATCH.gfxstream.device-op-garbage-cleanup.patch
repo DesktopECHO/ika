@@ -1,0 +1,151 @@
+Patch summary:
+Fences and semaphores that the DeviceOpTracker holds until their work
+finishes are destroyed when it does, however long it took. An entry still
+pending after 5 s used to be dropped from the list and leaked even once its
+work finished, and everything still pending when a device was destroyed
+leaked too. An old entry is now passed over and checked again on later
+polls, logged once, and whatever is left when the device goes is destroyed
+after the device is idle (or lost).
+DSA (desktop-subsystem-for-android) fixes the same leak in its patches 0016
+and 0024.
+diff --git a/host/vulkan/device_op_tracker.cpp b/host/vulkan/device_op_tracker.cpp
+index f0df1bff..03a55d5b 100644
+--- a/host/vulkan/device_op_tracker.cpp
++++ b/host/vulkan/device_op_tracker.cpp
+@@ -98,47 +98,39 @@ void DeviceOpTracker::PollAndProcessGarbage() {
+     {
+         std::lock_guard<std::mutex> pendingGarbageLock(mPendingGarbageMutex);
+ 
+-        // Assuming that pending garbage is added to the queue in the roughly the order
+-        // they are used, encountering an unsignaled/pending waitable likely means that
+-        // all pending garbage after is also still pending. This might not necessarily
+-        // always be the case but it is a simple heuristic to try to minimize the amount
+-        // of work performed here as it is expected that this function will be called
+-        // while processing other guest vulkan functions.
+-        auto firstPendingIt = std::find_if(mPendingGarbage.begin(), mPendingGarbage.end(),
+-                                           [old](const PendingGarbage& pendingGarbage) {
+-                                               if (pendingGarbage.timepoint < old) {
+-                                                   return /*still pending=*/false;
+-                                               }
+-                                               return !IsDone(pendingGarbage.waitable);
+-                                           });
+-
+-        for (auto it = mPendingGarbage.begin(); it != firstPendingIt; it++) {
+-            PendingGarbage& pendingGarbage = *it;
+-
+-            if (pendingGarbage.timepoint < old) {
+-                const auto difference = std::chrono::duration_cast<std::chrono::milliseconds>(
+-                    now - pendingGarbage.timepoint);
+-                GFXSTREAM_WARNING(
+-                    "VkDevice:%p had a waitable pending for %d milliseconds. Leaking object.",
+-                    mDevice, difference.count());
++        // Garbage is added roughly in the order its work was submitted, so the first recent
++        // entry whose work is still running likely means all after it are too: stop there,
++        // as this runs while other guest Vulkan calls are processed. An entry whose work has
++        // run for longer than kAutoDeleteTimeThreshold is passed over instead and checked
++        // again on later polls; it is destroyed once its work finishes, or when the device
++        // goes (it used to be leaked once it was old, finished or not).
++        size_t kept = 0;
++        size_t index = 0;
++        for (; index < mPendingGarbage.size(); index++) {
++            PendingGarbage& pendingGarbage = mPendingGarbage[index];
++            if (IsDone(pendingGarbage.waitable)) {
++                DestroyGarbage(pendingGarbage);
+                 continue;
+             }
+-
+-            std::visit(
+-                [this](auto&& arg) {
+-                    using T = std::decay_t<decltype(arg)>;
+-                    if constexpr (std::is_same_v<T, VkFence>) {
+-                        mDeviceDispatch->vkDestroyFence(mDevice, arg, nullptr);
+-                    } else if constexpr (std::is_same_v<T, VkSemaphore>) {
+-                        mDeviceDispatch->vkDestroySemaphore(mDevice, arg, nullptr);
+-                    } else {
+-                        static_assert(always_false_v<T>, "non-exhaustive visitor!");
+-                    }
+-                },
+-                pendingGarbage.obj);
++            if (pendingGarbage.timepoint >= old) {
++                break;
++            }
++            if (!pendingGarbage.reportedStale) {
++                pendingGarbage.reportedStale = true;
++                GFXSTREAM_WARNING("VkDevice:%p has a waitable pending for over %lld ms.", mDevice,
++                                  static_cast<long long>(
++                                      std::chrono::duration_cast<std::chrono::milliseconds>(
++                                          now - pendingGarbage.timepoint)
++                                          .count()));
++            }
++            if (kept != index) {
++                mPendingGarbage[kept] = std::move(pendingGarbage);
++            }
++            kept++;
++        }
++        if (kept != index) {
++            mPendingGarbage.erase(mPendingGarbage.begin() + kept, mPendingGarbage.begin() + index);
+         }
+-
+-        mPendingGarbage.erase(mPendingGarbage.begin(), firstPendingIt);
+ 
+         if (mPendingGarbage.size() > kSizeLoggingThreshold) {
+             GFXSTREAM_WARNING("VkDevice:%p has %d pending garbage objects.", mDevice,
+@@ -147,8 +139,23 @@ void DeviceOpTracker::PollAndProcessGarbage() {
+     }
+ }
+ 
++void DeviceOpTracker::DestroyGarbage(const PendingGarbage& pendingGarbage) {
++    std::visit(
++        [this](auto&& arg) {
++            using T = std::decay_t<decltype(arg)>;
++            if constexpr (std::is_same_v<T, VkFence>) {
++                mDeviceDispatch->vkDestroyFence(mDevice, arg, nullptr);
++            } else if constexpr (std::is_same_v<T, VkSemaphore>) {
++                mDeviceDispatch->vkDestroySemaphore(mDevice, arg, nullptr);
++            } else {
++                static_assert(always_false_v<T>, "non-exhaustive visitor!");
++            }
++        },
++        pendingGarbage.obj);
++}
++
+ void DeviceOpTracker::OnDestroyDevice() {
+-    mDeviceDispatch->vkDeviceWaitIdle(mDevice);
++    const VkResult idleResult = mDeviceDispatch->vkDeviceWaitIdle(mDevice);
+ 
+     PollAndProcessGarbage();
+ 
+@@ -165,8 +172,17 @@ void DeviceOpTracker::OnDestroyDevice() {
+     {
+         std::lock_guard<std::mutex> lock(mPendingGarbageMutex);
+         if (!mPendingGarbage.empty()) {
+-            GFXSTREAM_WARNING("VkDevice:%p has %d leaking garbage objects on destruction.", mDevice,
+-                              mPendingGarbage.size());
++            // The device is idle (or lost, and runs nothing more), so nothing still uses the
++            // objects whose waitables are pending: destroy them with the device.
++            if (idleResult == VK_SUCCESS || idleResult == VK_ERROR_DEVICE_LOST) {
++                for (const PendingGarbage& pendingGarbage : mPendingGarbage) {
++                    DestroyGarbage(pendingGarbage);
++                }
++                mPendingGarbage.clear();
++            } else {
++                GFXSTREAM_WARNING("VkDevice:%p has %d leaking garbage objects on destruction.",
++                                  mDevice, mPendingGarbage.size());
++            }
+         }
+     }
+ }
+diff --git a/host/vulkan/device_op_tracker.h b/host/vulkan/device_op_tracker.h
+index bebd0fe7..5a94cb22 100644
+--- a/host/vulkan/device_op_tracker.h
++++ b/host/vulkan/device_op_tracker.h
+@@ -87,7 +87,9 @@ class DeviceOpTracker {
+         DeviceOpWaitable waitable;
+         std::variant<VkFence, VkSemaphore> obj;
+         std::chrono::time_point<std::chrono::system_clock> timepoint;
++        bool reportedStale = false;
+     };
++    void DestroyGarbage(const PendingGarbage& pendingGarbage);
+     std::mutex mPendingGarbageMutex;
+     std::deque<PendingGarbage> mPendingGarbage GUARDED_BY(mPendingGarbageMutex);
+ };

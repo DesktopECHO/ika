@@ -141,5 +141,14 @@ git_repository(
         # A CPU upload into a ColorBuffer waits for queued GPU work on the image
         # and is visible to the work after it.
         "@//build_external/gfxstream:PATCH.gfxstream.color-buffer-upload-barriers.patch",
+        # A render thread's read, reply and pool buffers shrink back after a
+        # large command.
+        "@//build_external/gfxstream:PATCH.gfxstream.shrink-stream-buffers.patch",
+        # The ColorBuffer staging buffer is made at its first use, at the size
+        # needed, instead of 128 MiB at start.
+        "@//build_external/gfxstream:PATCH.gfxstream.staging-buffer-on-demand.patch",
+        # Fences and semaphores held until their work finishes are destroyed
+        # when it does, however long it took.
+        "@//build_external/gfxstream:PATCH.gfxstream.device-op-garbage-cleanup.patch",
     ],
 )
