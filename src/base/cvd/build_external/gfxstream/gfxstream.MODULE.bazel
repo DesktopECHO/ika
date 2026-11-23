@@ -101,7 +101,8 @@ git_repository(
         # not the VM; losing gfxstream's own device restarts the VM.
         "@//build_external/gfxstream:PATCH.gfxstream.survive-guest-device-loss.patch",
         # A driver that cannot export dma-bufs (lavapipe under WSL2, no
-        # /dev/udmabuf) gets exportable allocations with opaque handles only.
+        # /dev/udmabuf) gets exportable allocations with opaque handles only,
+        # exported as opaque fds.
         "@//build_external/gfxstream:PATCH.gfxstream.dma-buf-export-fallback.patch",
         # A decoder thread waiting for its turn in the guest's command order
         # sleeps instead of spinning a host core.
@@ -135,5 +136,10 @@ git_repository(
         # A guest app whose VkDevice was lost is torn down when it exits instead
         # of aborting in ~ExternalFencePool.
         "@//build_external/gfxstream:PATCH.gfxstream.lost-device-teardown.patch",
+        # A QSRI fence whose wait timed out is reused only once it has signaled.
+        "@//build_external/gfxstream:PATCH.gfxstream.qsri-fence-in-flight.patch",
+        # A CPU upload into a ColorBuffer waits for queued GPU work on the image
+        # and is visible to the work after it.
+        "@//build_external/gfxstream:PATCH.gfxstream.color-buffer-upload-barriers.patch",
     ],
 )

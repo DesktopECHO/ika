@@ -1,0 +1,95 @@
+Patch summary:
+A CPU upload into a ColorBuffer waits for the GPU work already queued on
+the image and is visible to the work after it. The barriers around the copy
+went from TOP_OF_PIPE with no source access and ended at BOTTOM_OF_PIPE with
+no destination access, so the copy could overtake a composition still
+sampling the previous contents, and an image with no tracked layout got no
+barrier after the copy at all. Ika uploads every software-decoded video
+frame and every frame of the Dozen YUV fallback this way.
+DSA (desktop-subsystem-for-android) orders the same upload in its patch 0030.
+diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
+index 9346c541..67fc4f69 100644
+--- a/host/vulkan/vk_common_operations.cpp
++++ b/host/vulkan/vk_common_operations.cpp
+@@ -5407,11 +5407,14 @@ bool VkEmulation::updateColorBufferFromBytesLocked(uint32_t colorBufferHandle, u
+         currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+     }
+     const VkImageAspectFlags aspectMask = getFormatAspects(creationFormat);
++    // The upload must not overtake work already queued that reads or writes the image, such
++    // as the compositor sampling the previous frame: wait for all earlier commands and make
++    // their accesses available before the copy writes.
+     const VkImageMemoryBarrier toTransferDstImageBarrier = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+         .pNext = nullptr,
+-        .srcAccessMask = 0,
+-        .dstAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
++        .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
++        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+         .oldLayout = currentLayout,
+         .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+@@ -5427,7 +5430,7 @@ bool VkEmulation::updateColorBufferFromBytesLocked(uint32_t colorBufferHandle, u
+             },
+     };
+ 
+-    vk->vkCmdPipelineBarrier(mCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++    vk->vkCmdPipelineBarrier(mCommandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                              &toTransferDstImageBarrier);
+ 
+@@ -5436,32 +5439,29 @@ bool VkEmulation::updateColorBufferFromBytesLocked(uint32_t colorBufferHandle, u
+                                toTransferDstImageBarrier.newLayout, bufferImageCopies.size(),
+                                bufferImageCopies.data());
+ 
+-    if (colorBufferInfo->currentLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
+-        const VkImageMemoryBarrier toCurrentLayoutImageBarrier = {
+-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+-            .pNext = nullptr,
+-            .srcAccessMask = toTransferDstImageBarrier.dstAccessMask,
+-            .dstAccessMask = VK_ACCESS_NONE_KHR,
+-            .oldLayout = toTransferDstImageBarrier.newLayout,
+-            .newLayout = colorBufferInfo->currentLayout,
+-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+-            .image = colorBufferInfo->image,
+-            .subresourceRange =
+-                {
+-                    .aspectMask = aspectMask,
+-                    .baseMipLevel = 0,
+-                    .levelCount = 1,
+-                    .baseArrayLayer = 0,
+-                    .layerCount = 1,
+-                },
+-        };
+-        vk->vkCmdPipelineBarrier(mCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+-                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
+-                                 &toCurrentLayoutImageBarrier);
+-    } else {
+-        colorBufferInfo->currentLayout = toTransferDstImageBarrier.newLayout;
+-    }
++    // Make the copied texels visible to whatever reads the image next, in any stage, and
++    // return it to the layout it is tracked in. An image that had no layout yet keeps the
++    // transfer destination layout.
++    const VkImageLayout layoutAfterUpload =
++        colorBufferInfo->currentLayout != VK_IMAGE_LAYOUT_UNDEFINED
++            ? colorBufferInfo->currentLayout
++            : toTransferDstImageBarrier.newLayout;
++    const VkImageMemoryBarrier afterUploadImageBarrier = {
++        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
++        .pNext = nullptr,
++        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
++        .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
++        .oldLayout = toTransferDstImageBarrier.newLayout,
++        .newLayout = layoutAfterUpload,
++        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++        .image = colorBufferInfo->image,
++        .subresourceRange = toTransferDstImageBarrier.subresourceRange,
++    };
++    vk->vkCmdPipelineBarrier(mCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
++                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1,
++                             &afterUploadImageBarrier);
++    colorBufferInfo->currentLayout = layoutAfterUpload;
+ 
+     mDebugUtilsHelper.cmdEndDebugLabel(mCommandBuffer);
+ 

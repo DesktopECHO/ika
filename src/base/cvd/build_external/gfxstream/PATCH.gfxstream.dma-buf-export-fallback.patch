@@ -6,8 +6,14 @@ not have, so every exportable allocation failed there
 (VK_ERROR_OUT_OF_DEVICE_MEMORY, logged at debug level only) and gfxstream
 could not start on lavapipe: "Failed to find memory type for ColorBuffers".
 Opaque file descriptors are what gfxstream shares ColorBuffers with.
+
+The memory is then exported with the handle type it was allocated with: an
+allocation that fell back to opaque handles is exported as an opaque fd and
+announced to the VMM as one, not asked for a dma-buf it cannot give
+(invalid Vulkan usage, and the VMM would treat the fd as a dma-buf).
+DSA (desktop-subsystem-for-android) fixes the same case in its patch 0039.
 diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
-index 4250d441d..2d747ae4e 100644
+index 4250d441..9346c541 100644
 --- a/host/vulkan/vk_common_operations.cpp
 +++ b/host/vulkan/vk_common_operations.cpp
 @@ -13,6 +13,7 @@
@@ -41,3 +47,15 @@ index 4250d441d..2d747ae4e 100644
          if (allocRes != VK_SUCCESS) {
              GFXSTREAM_DEBUG("allocExternalMemory: failed in vkAllocateMemory: %s",
                              string_VkResult(allocRes));
+@@ -2824,8 +2841,9 @@ bool VkEmulation::allocExternalMemory(VulkanDispatch* vk, VkEmulation::ExternalM
+             streamHandleType = STREAM_HANDLE_TYPE_MEM_OPAQUE_FD;
+             VkExternalMemoryHandleTypeFlagBits vkHandleType =
+                 VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+-            if (mDeviceInfo.supportsDmaBuf ||
+-                mDeviceInfo.externalMemoryMode == ExternalMemory::Mode::DmaBuf) {
++            // Export the handle type the memory was allocated with: the dma-buf type only if
++            // the allocation above kept it (in DmaBuf mode it is the only type, and stays).
++            if (exportAi.handleTypes & VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
+                 vkHandleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+                 streamHandleType = STREAM_HANDLE_TYPE_MEM_DMABUF;
+             }

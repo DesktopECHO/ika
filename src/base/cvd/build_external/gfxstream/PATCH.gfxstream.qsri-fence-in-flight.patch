@@ -1,0 +1,127 @@
+Patch summary:
+A QSRI fence whose wait gave up is not reset and reused while the GPU may
+still signal it. After the 3 s wait for a vkQueueSignalReleaseImageANDROID
+submission timed out (or its device was lost), the fence went back to the
+pool, and the next submission reset it: invalid usage on a fence still in
+use, seen as stalls on slow GPUs and under WSL2. Such a fence now waits in
+an in-flight list and rejoins the pool once it has signaled; the pool
+destroys it at the end if its work is over, and the reset of a pooled fence
+tolerates a lost device.
+DSA (desktop-subsystem-for-android) fixes the same reuse in its patch 0018.
+diff --git a/host/vulkan/vk_android_native_buffer_operations.cpp b/host/vulkan/vk_android_native_buffer_operations.cpp
+index a4c95291..cf285029 100644
+--- a/host/vulkan/vk_android_native_buffer_operations.cpp
++++ b/host/vulkan/vk_android_native_buffer_operations.cpp
+@@ -46,9 +46,24 @@ namespace vk {
+ AndroidNativeBufferInfo::QsriWaitFencePool::QsriWaitFencePool(VulkanDispatch* vk, VkDevice device)
+     : mVk(vk), mDevice(device) {}
+ 
++void AndroidNativeBufferInfo::QsriWaitFencePool::reclaimInFlightFencesLocked() {
++    size_t kept = 0;
++    for (VkFence fence : mInFlightFences) {
++        if (mVk->vkGetFenceStatus(mDevice, fence) == VK_SUCCESS) {
++            mAvailableFences.push_back(fence);
++        } else {
++            mInFlightFences[kept++] = fence;
++        }
++    }
++    mInFlightFences.resize(kept);
++}
++
+ VkFence AndroidNativeBufferInfo::QsriWaitFencePool::getFenceFromPool() {
+     VK_ANB_DEBUG("enter");
+     std::lock_guard<std::mutex> lock(mMutex);
++    if (!mInFlightFences.empty()) {
++        reclaimInFlightFencesLocked();
++    }
+     VkFence fence = VK_NULL_HANDLE;
+     if (mAvailableFences.empty()) {
+         VkFenceCreateInfo fenceCreateInfo = {
+@@ -61,10 +76,7 @@ VkFence AndroidNativeBufferInfo::QsriWaitFencePool::getFenceFromPool() {
+     } else {
+         fence = mAvailableFences.back();
+         mAvailableFences.pop_back();
+-        VkResult res = mVk->vkResetFences(mDevice, 1, &fence);
+-        if (res != VK_SUCCESS) {
+-            GFXSTREAM_FATAL("Failed to reset QSRI VkFence: %s", string_VkResult(res));
+-        }
++        VK_CHECK_GUEST_DEVICE(mVk->vkResetFences(mDevice, 1, &fence));
+         VK_ANB_DEBUG("existing fence in pool: %p. also reset the fence", fence);
+     }
+     mUsedFences.emplace(fence);
+@@ -83,16 +95,35 @@ AndroidNativeBufferInfo::QsriWaitFencePool::~QsriWaitFencePool() {
+         VK_ANB_DEBUG("destroy fence %p", fence);
+         mVk->vkDestroyFence(mDevice, fence, nullptr);
+     }
++    // A fence the GPU never signaled is destroyed only if its work is over: done since, or
++    // never to finish on a lost device. Otherwise it is left to the device.
++    size_t leaked = 0;
++    for (auto fence : mInFlightFences) {
++        const VkResult status = mVk->vkGetFenceStatus(mDevice, fence);
++        if (status == VK_SUCCESS || status == VK_ERROR_DEVICE_LOST) {
++            mVk->vkDestroyFence(mDevice, fence, nullptr);
++        } else {
++            leaked++;
++        }
++    }
++    if (leaked) {
++        VK_ANB_ERR("%zu QSRI VkFences still pending when destroying the Qsri fence pool.",
++                   leaked);
++    }
+     VK_ANB_DEBUG("exit");
+ }
+ 
+-void AndroidNativeBufferInfo::QsriWaitFencePool::returnFence(VkFence fence) {
++void AndroidNativeBufferInfo::QsriWaitFencePool::returnFence(VkFence fence, bool signaled) {
+     std::lock_guard<std::mutex> lock(mMutex);
+     if (!mUsedFences.erase(fence)) {
+         GFXSTREAM_FATAL("Return an unmanaged Qsri VkFence back to the pool.");
+         return;
+     }
+-    mAvailableFences.push_back(fence);
++    if (signaled) {
++        mAvailableFences.push_back(fence);
++    } else {
++        mInFlightFences.push_back(fence);
++    }
+ }
+ 
+ static bool parseAndroidNativeBufferInfo(const VkImageCreateInfo* pCreateInfo,
+@@ -936,7 +967,7 @@ VkResult AndroidNativeBufferInfo::on_vkQueueSignalReleaseImageANDROID(
+                 VK_CHECK(res);
+         }
+         VK_ANB_DEBUG_OBJ(this, "wait callback: wait for fence %p...(done)", qsriFence);
+-        mQsriWaitFencePool->returnFence(qsriFence);
++        mQsriWaitFencePool->returnFence(qsriFence, /*signaled=*/res == VK_SUCCESS);
+     };
+     emu->getGlobalState()->unlockGlobalState();
+ 
+diff --git a/host/vulkan/vk_android_native_buffer_operations.h b/host/vulkan/vk_android_native_buffer_operations.h
+index 2cb3747d..fe94e916 100644
+--- a/host/vulkan/vk_android_native_buffer_operations.h
++++ b/host/vulkan/vk_android_native_buffer_operations.h
+@@ -157,9 +157,14 @@ class AndroidNativeBufferInfo {
+         QsriWaitFencePool(VulkanDispatch*, VkDevice);
+         ~QsriWaitFencePool();
+         VkFence getFenceFromPool();
+-        void returnFence(VkFence fence);
++        // `signaled` is false when the wait for the fence gave up (a timeout or a lost
++        // device): the GPU may still signal it, so it must not be reset and reused yet.
++        void returnFence(VkFence fence, bool signaled);
+ 
+        private:
++        // Moves the fences of mInFlightFences that have signaled since to mAvailableFences.
++        void reclaimInFlightFencesLocked() REQUIRES(mMutex);
++
+         std::mutex mMutex;
+ 
+         VulkanDispatch* mVk;
+@@ -169,6 +174,8 @@ class AndroidNativeBufferInfo {
+         // time).
+         std::vector<VkFence> mAvailableFences GUARDED_BY(mMutex);
+         std::unordered_set<VkFence> mUsedFences GUARDED_BY(mMutex);
++        // Fences returned before they signaled.
++        std::vector<VkFence> mInFlightFences GUARDED_BY(mMutex);
+     };
+ 
+     std::unique_ptr<QsriWaitFencePool> mQsriWaitFencePool;
