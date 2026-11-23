@@ -70,3 +70,4 @@ dzn-intel-depth-copies.patch
 dzn-intel-ds-array-discard.patch
 dzn-intel-msaa-ds-copies.patch
 dzn-26.3-backports.patch
+mesa-26.3-backports.patch

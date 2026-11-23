@@ -1,0 +1,112 @@
+Backport three fixes from Mesa's 26.3 branch
+
+Mesa's staging/26.3 branch, after 26.3.1. Drop this patch when the Mesa
+release moves to one that has them (26.3.2).
+
+- 9acd867d nir/clone: preserve input attachment info of texture
+  instructions, which were lost when a loop containing subpassLoad() was
+  unrolled.
+- a43fc87e nir/opt_varyings: clear output_equal_mask when a geometry shader
+  stores outputs in a loop.
+- 143dde4a vulkan: ignore pColorBlendState->attachmentCount when the color
+  blend enable, equation and write mask are all dynamic, as Vulkan 1.4.368
+  clarified.
+
+diff --git a/src/compiler/nir/nir_clone.c b/src/compiler/nir/nir_clone.c
+index a6dd752..533f61d 100644
+--- a/src/compiler/nir/nir_clone.c
++++ b/src/compiler/nir/nir_clone.c
+@@ -421,6 +421,11 @@ clone_tex(clone_state *state, const nir_tex_instr *tex)
+    ntex->sampler_index = tex->sampler_index;
+    ntex->can_speculate = tex->can_speculate;
+ 
++   ntex->texture_array_size = tex->texture_array_size;
++   ntex->input_attachment_index = tex->input_attachment_index;
++   ntex->input_attachment_depth = tex->input_attachment_depth;
++   ntex->input_attachment_stencil = tex->input_attachment_stencil;
++
+    ntex->texture_non_uniform = tex->texture_non_uniform;
+    ntex->sampler_non_uniform = tex->sampler_non_uniform;
+    ntex->embedded_sampler = tex->embedded_sampler;
+diff --git a/src/compiler/nir/nir_opt_varyings.c b/src/compiler/nir/nir_opt_varyings.c
+index 73ddaf8..7470669 100644
+--- a/src/compiler/nir/nir_opt_varyings.c
++++ b/src/compiler/nir/nir_opt_varyings.c
+@@ -1763,6 +1763,24 @@ gather_outputs(struct nir_builder *builder, nir_intrinsic_instr *intr, void *cb_
+          }
+       }
+ 
++      /* If the store value is inside a loop, there might be multiple
++       * different store values to the output. This matters for geometry
++       * shaders because they can each be for a different vertex.
++       *
++       * TODO: This can disable uniform expression propagation and promotion
++       * of convergent varyings to flat. We should use some kind of proper
++       * loop invariance analysis to determine equility of output values.
++       */
++      if (linkage->producer_stage == MESA_SHADER_GEOMETRY && !nir_scalar_is_const(value)) {
++         for (nir_cf_node *node = &nir_def_instr(value.def)->block->cf_node;
++            node->type != nir_cf_node_function; node = node->parent) {
++            if (node->type == nir_cf_node_loop) {
++               BITSET_CLEAR(linkage->output_equal_mask, slot);
++               break;
++            }
++         }
++      }
++
+       if (linkage->producer_stage == MESA_SHADER_MESH &&
+           intr->intrinsic == nir_intrinsic_store_per_vertex_output) {
+          nir_src *vertex_index_src = nir_get_io_arrayed_index_src(intr);
+diff --git a/src/vulkan/runtime/vk_graphics_state.c b/src/vulkan/runtime/vk_graphics_state.c
+index e11d9d3..90ed2ce 100644
+--- a/src/vulkan/runtime/vk_graphics_state.c
++++ b/src/vulkan/runtime/vk_graphics_state.c
+@@ -1026,17 +1026,21 @@ vk_color_blend_state_init(struct vk_color_blend_state *cb,
+    cb->logic_op_enable = cb_info->logicOpEnable;
+    cb->logic_op = cb_info->logicOp;
+ 
+-   assert(cb_info->attachmentCount <= MESA_VK_MAX_COLOR_ATTACHMENTS);
+-   cb->attachment_count = cb_info->attachmentCount;
+-
+-   /* Per spec, pAttachments is ignored if BLEND_ENABLES, BLEND_EQUATIONS,
+-    * WRITE_MASKS, and BLEND_ADVANCED are all dynamic.
++   /* Per spec, attachmentCount and pAttachments are ignored if
++    * BLEND_ENABLES, BLEND_EQUATIONS, WRITE_MASKS, and BLEND_ADVANCED are all
++    * dynamic. BLEND_ADVANCED is implicitly dynamic when
++    * advancedBlendCoherentOperations is not enabled.
+     */
+    bool full_dynamic = IS_DYNAMIC(CB_BLEND_ENABLES) &&
+                        IS_DYNAMIC(CB_BLEND_EQUATIONS) &&
+                        IS_DYNAMIC(CB_WRITE_MASKS) &&
+                        IS_DYNAMIC(CB_BLEND_ADVANCED);
+ 
++   if (!full_dynamic) {
++      assert(cb_info->attachmentCount <= MESA_VK_MAX_COLOR_ATTACHMENTS);
++      cb->attachment_count = cb_info->attachmentCount;
++   }
++
+    /* Advanced blend state is ignored if CB_BLEND_ADVANCED is dynamic */
+    const VkPipelineColorBlendAdvancedStateCreateInfoEXT *advanced = NULL;
+    if (!IS_DYNAMIC(CB_BLEND_ADVANCED)) {
+@@ -1044,9 +1048,8 @@ vk_color_blend_state_init(struct vk_color_blend_state *cb,
+          PIPELINE_COLOR_BLEND_ADVANCED_STATE_CREATE_INFO_EXT);
+    }
+ 
+-   for (uint32_t a = 0; a < cb_info->attachmentCount; a++) {
+-      const VkPipelineColorBlendAttachmentState *att =
+-         full_dynamic ? NULL : &cb_info->pAttachments[a];
++   for (uint32_t a = 0; a < cb->attachment_count; a++) {
++      const VkPipelineColorBlendAttachmentState *att = &cb_info->pAttachments[a];
+ 
+       cb->attachments[a] = (struct vk_color_blend_attachment_state) {
+          .blend_enable = IS_DYNAMIC(CB_BLEND_ENABLES) || att->blendEnable,
+@@ -1071,7 +1074,8 @@ vk_color_blend_state_init(struct vk_color_blend_state *cb,
+       vk_find_struct_const(cb_info->pNext, PIPELINE_COLOR_WRITE_CREATE_INFO_EXT);
+    if (!IS_DYNAMIC(CB_COLOR_WRITE_ENABLES) && cw_info != NULL) {
+       uint8_t color_write_enables = 0;
+-      assert(cb_info->attachmentCount == cw_info->attachmentCount);
++      assert(full_dynamic ||
++             cb_info->attachmentCount == cw_info->attachmentCount);
+       for (uint32_t a = 0; a < cw_info->attachmentCount; a++) {
+          if (cw_info->pColorWriteEnables[a])
+             color_write_enables |= BITFIELD_BIT(a);

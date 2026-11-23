@@ -59,6 +59,7 @@ external/mesa3d patches/external-mesa3d-gfxstream-semaphore-host-fence.patch
 external/mesa3d patches/external-mesa3d-honeykrisp-android.patch
 external/mesa3d patches/external-mesa3d-honeykrisp-vs-nir-leak.patch
 external/mesa3d patches/external-mesa3d-honeykrisp-exec-heap.patch
+external/mesa3d patches/external-mesa3d-26.3-backports.patch
 external/libavc patches/external-libavc-encoder-max-size.patch
 external/libavc patches/external-libavc-vbr-vbv-floor.patch
 external/v4l2_codec2 patches/external-v4l2_codec2-virtio-media.patch
