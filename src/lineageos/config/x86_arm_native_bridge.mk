@@ -4,8 +4,44 @@
 #
 
 LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE ?= true
+# The ARM64 translator of the x86-64 ROM:
+# digitalis (the default): Digitalis, the open ARM64 backend for AOSP's
+#   Berberis, built from frameworks/libs/binary_translation (the manifest pins
+#   DigitalisX64's in place of AOSP's).
+# ndk_translation: Google's closed libndk_translation, taken from an Android
+#   SDK system image by scripts/update_native_bridge_prebuilts.py.
+LINEAGE_DESKTOP_X86_ARM_TRANSLATOR ?= digitalis
 
-ifeq ($(LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE),true)
+ifeq ($(LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE)_$(LINEAGE_DESKTOP_X86_ARM_TRANSLATOR),true_digitalis)
+ifeq (,$(wildcard frameworks/libs/binary_translation/enable_arm64_to_x86_64.mk))
+$(error LINEAGE_DESKTOP_X86_ARM_TRANSLATOR=digitalis needs DigitalisX64's frameworks/libs/binary_translation)
+endif
+include frameworks/libs/binary_translation/berberis_config.mk
+include frameworks/libs/native_bridge_support/native_bridge_support.mk
+
+PRODUCT_SOONG_NAMESPACES += \
+    frameworks/libs/native_bridge_support/android_api/libc
+
+PRODUCT_PACKAGES += \
+    $(BERBERIS_PRODUCT_PACKAGES_ARM64_TO_X86_64)
+
+PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
+    $(BERBERIS_DISTRIBUTION_ARTIFACTS_ARM64) \
+    $(TARGET_COPY_OUT_SYSTEM)/lib64/arm64/% \
+    $(TARGET_COPY_OUT_SYSTEM)/bin/arm64/% \
+    $(TARGET_COPY_OUT_SYSTEM)/lib64/libblasV8.so
+
+BUILD_BERBERIS := true
+BUILD_BERBERIS_ARM64_TO_X86_64 := true
+$(call soong_config_set,berberis,translation_arch,arm64_to_x86_64)
+
+# As below: product properties override runtime_libart's default.
+PRODUCT_PRODUCT_PROPERTIES += \
+    ro.dalvik.vm.native.bridge=libberberis_arm64.so \
+    ro.dalvik.vm.isa.arm64=x86_64 \
+    ro.enable.native.bridge.exec=1 \
+    ro.berberis.flags=disable-ir-check
+else ifeq ($(LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE)_$(LINEAGE_DESKTOP_X86_ARM_TRANSLATOR),true_ndk_translation)
 LINEAGE_DESKTOP_NATIVE_BRIDGE_PREBUILT_DIR := vendor/lineage_desktop/prebuilts/native_bridge/system
 LINEAGE_DESKTOP_NATIVE_BRIDGE_LIBRARY := $(LINEAGE_DESKTOP_NATIVE_BRIDGE_PREBUILT_DIR)/lib64/libndk_translation.so
 
@@ -62,4 +98,6 @@ PRODUCT_PRODUCT_PROPERTIES += \
 else
 $(warning x86 ARM64 native bridge payload missing: run vendor/lineage_desktop/scripts/update_native_bridge_prebuilts.py before building x86-64)
 endif
+else ifeq ($(LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE),true)
+$(error LINEAGE_DESKTOP_X86_ARM_TRANSLATOR must be digitalis or ndk_translation, not '$(LINEAGE_DESKTOP_X86_ARM_TRANSLATOR)')
 endif

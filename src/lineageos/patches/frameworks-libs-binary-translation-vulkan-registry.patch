@@ -1,0 +1,13 @@
+diff --git a/android_api/libvulkan/Android.bp b/android_api/libvulkan/Android.bp
+index c56fd876..0e0653e7 100644
+--- a/android_api/libvulkan/Android.bp
++++ b/android_api/libvulkan/Android.bp
+@@ -29,7 +29,7 @@ genrule {
+ genrule {
+     name: "libberberis_android_api_libvulkan_vulkan_xml_headers_arm64_to_x86_64",
+     out: ["vulkan_xml-inl.h"],
+-    srcs: [":vulkan_headers_registry"],
++    srcs: [":ika_vulkan_registry_android16"],
+     tools: ["gen_vulkan"],
+     cmd: "$(location gen_vulkan) --xml $(out) --input $(in) --guest_arch arm64 --host_arch x86_64",
+ }

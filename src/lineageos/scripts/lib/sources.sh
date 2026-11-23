@@ -1514,6 +1514,8 @@ targets_include_x86_64() {
 
 update_native_bridge_prebuilts_for_targets() {
   enabled "$include_x86_arm_native_bridge" || return 0
+  # Only Google's translator comes from an SDK image; Digitalis is built from source.
+  [[ "${x86_arm_translator:-digitalis}" == "ndk_translation" ]] || return 0
   enabled "$update_native_bridge_prebuilts" || return 0
   targets_include_x86_64 "$@" || return 0
 

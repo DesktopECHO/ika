@@ -36,6 +36,7 @@ gms_provider="none"
 include_microg=0
 update_microg_prebuilts="${UPDATE_MICROG_PREBUILTS:-1}"
 include_x86_arm_native_bridge="${INCLUDE_X86_ARM_NATIVE_BRIDGE:-1}"
+x86_arm_translator="${X86_ARM_TRANSLATOR:-digitalis}"
 build_native_bridge_tests="${BUILD_NATIVE_BRIDGE_TESTS:-0}"
 build_vulkan_tests="${BUILD_VULKAN_TESTS:-1}"
 update_native_bridge_prebuilts="${UPDATE_NATIVE_BRIDGE_PREBUILTS:-1}"
@@ -134,6 +135,13 @@ die() {
   printf '[lineage-desktop] error: %s\n' "$*" >&2
   exit 1
 }
+
+case "$x86_arm_translator" in
+  digitalis|ndk_translation) ;;
+  *) die "X86_ARM_TRANSLATOR must be digitalis or ndk_translation (got '$x86_arm_translator')" ;;
+esac
+# validate_build_inputs.sh, bundle.sh and write_release_metadata.py read it too.
+export X86_ARM_TRANSLATOR="$x86_arm_translator"
 
 case "$build_variant" in
   user|userdebug|eng) ;;
@@ -366,13 +374,20 @@ build_target() {
   repair_zero_size_cvd_host_package "$host_package"
 
   if [[ "$arch" == "x86_64" ]]; then
-    if enabled "$include_x86_arm_native_bridge"; then
+    if enabled "$include_x86_arm_native_bridge" && [[ "$x86_arm_translator" == "ndk_translation" ]]; then
       # The payload must already be installed before product config is parsed,
       # or the bridge is silently dropped from the image. Fail loudly instead.
       local nb_lib="$workspace/vendor/lineage_desktop/prebuilts/native_bridge/system/lib64/libndk_translation.so"
       [[ -f "$nb_lib" ]] || die "x86 ARM64 native bridge enabled but payload missing ($nb_lib); native bridge prebuilts must be populated before building x86_64"
       export LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=true
+      export LINEAGE_DESKTOP_X86_ARM_TRANSLATOR=ndk_translation
       export USE_NDK_TRANSLATION_BINARY=true
+    elif enabled "$include_x86_arm_native_bridge"; then
+      # Digitalis is built from frameworks/libs/binary_translation; there is
+      # no payload to download.
+      export LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=true
+      export LINEAGE_DESKTOP_X86_ARM_TRANSLATOR=digitalis
+      unset USE_NDK_TRANSLATION_BINARY || true
     else
       export LINEAGE_DESKTOP_ENABLE_X86_ARM_NATIVE_BRIDGE=false
       unset USE_NDK_TRANSLATION_BINARY || true

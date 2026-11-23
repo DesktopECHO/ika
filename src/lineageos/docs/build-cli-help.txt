@@ -63,6 +63,10 @@ Environment:
   INCLUDE_X86_ARM_NATIVE_BRIDGE
                         Enable ARM64 native bridge support for the x86-64 ROM.
                         Default: 1
+  X86_ARM_TRANSLATOR    The x86-64 ROM's ARM64 translator: digitalis (Digitalis,
+                        the open Berberis ARM64 backend, built from source) or
+                        ndk_translation (Google's, from an SDK image).
+                        Default: digitalis
   BUILD_NATIVE_BRIDGE_TESTS
                         Build, validate, and bundle the ARM64 native-bridge NDK
                         regression suites for x86-64. Default: 0
@@ -70,7 +74,8 @@ Environment:
                         diagnostics for either architecture. Default: 1
   UPDATE_NATIVE_BRIDGE_PREBUILTS
                         Download/extract the Google NDK translation payload for
-                        x86-64 builds before building. Default: 1
+                        x86-64 builds before building, with
+                        X86_ARM_TRANSLATOR=ndk_translation. Default: 1
   VALIDATE_BUILD_INPUTS
                         Run build-time source, ARM64 host prebuilt/toolchain,
                         userdata, and desktop policy checks before compiling.

@@ -1081,12 +1081,47 @@ check_webview_prebuilts() {
   done
 }
 
+# Digitalis, the default ARM64 translator of the x86-64 ROM, is built from
+# frameworks/libs/binary_translation, which the manifest takes from DigitalisX64.
+check_digitalis_native_bridge() {
+  local translation="$android_root/frameworks/libs/binary_translation"
+  local required
+  for required in \
+    "$translation/berberis_config.mk" \
+    "$translation/android_api/libvulkan/Android.bp" \
+    "$android_root/frameworks/libs/native_bridge_support/android_api/libc/Android.bp" \
+    "$overlay_dir/prebuilts/vulkan_registry_android16/vk.xml"
+  do
+    require_file "$required"
+  done
+
+  grep -q 'BERBERIS_PRODUCT_PACKAGES_ARM64_TO_X86_64' "$translation/berberis_config.mk" 2>/dev/null || \
+    fail "frameworks/libs/binary_translation has no ARM64 translator (expected DigitalisX64's); rerun with SKIP_SYNC=0"
+  grep -q 'ika_vulkan_registry_android16' "$translation/android_api/libvulkan/Android.bp" 2>/dev/null || \
+    fail "the ARM64 translator's Vulkan proxy is not generated from prebuilts/vulkan_registry_android16 (frameworks-libs-binary-translation-vulkan-registry.patch)"
+  grep -q 'ro.dalvik.vm.native.bridge=libberberis_arm64.so' \
+    "$overlay_dir/config/x86_arm_native_bridge.mk" || \
+    fail "x86 native bridge product properties are missing"
+}
+
 check_native_bridge() {
   target_enabled x86_64 || return 0
 
   case "${INCLUDE_X86_ARM_NATIVE_BRIDGE:-1}" in
     0|false|no|off)
       log "native bridge validation skipped by INCLUDE_X86_ARM_NATIVE_BRIDGE=0"
+      return 0
+      ;;
+  esac
+
+  case "${X86_ARM_TRANSLATOR:-digitalis}" in
+    digitalis)
+      check_digitalis_native_bridge
+      return 0
+      ;;
+    ndk_translation) ;;
+    *)
+      fail "X86_ARM_TRANSLATOR must be digitalis or ndk_translation (got '${X86_ARM_TRANSLATOR}')"
       return 0
       ;;
   esac
@@ -1508,6 +1543,8 @@ expected = {
         "1f181b0b3e4b821459f21fd9025cd4c408c4f9ec",
     ("KhronosGroup/Vulkan-Headers", "external/vulkan-headers"):
         "0b7f383797fa7be53ae28213e001ae60668ee511",
+    ("platform_frameworks_libs_binary_translation", "frameworks/libs/binary_translation"):
+        "246557a31ba5ba055b897d377fb8ced8afbcb5be",
 }
 
 root = ET.parse(manifest).getroot()
@@ -1561,6 +1598,7 @@ external/crosvm c7dd8d6950912fa5e6fde7ec2d1616e0ddc090f8
 hardware/google/gfxstream b46f0d4b4545def09bdf30651d4bf848b2ba0c34
 external/rust/rutabaga_gfx 1f181b0b3e4b821459f21fd9025cd4c408c4f9ec
 external/vulkan-headers 0b7f383797fa7be53ae28213e001ae60668ee511
+frameworks/libs/binary_translation 246557a31ba5ba055b897d377fb8ced8afbcb5be
 EOF
 }
 

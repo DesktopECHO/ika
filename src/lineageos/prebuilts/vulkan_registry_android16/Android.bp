@@ -1,0 +1,7 @@
+// Android 16's Vulkan registry, for the ARM translator's Vulkan proxy
+// generator, which cannot read the newer registry in external/vulkan-headers
+// (see README.md).
+filegroup {
+    name: "ika_vulkan_registry_android16",
+    srcs: ["vk.xml"],
+}

@@ -124,6 +124,23 @@ def webview_info(android_root: Path, arch: str) -> dict[str, Any]:
     return data
 
 
+def x86_arm_translator() -> str:
+    return os.environ.get("X86_ARM_TRANSLATOR", "digitalis")
+
+
+def digitalis_info(android_root: Path, overlay_dir: Path) -> dict[str, Any]:
+    """Digitalis is built from frameworks/libs/binary_translation; its Vulkan
+    proxy is generated from Android 16's registry in the overlay."""
+    return {
+        "translator": "digitalis",
+        "native_bridge": "libberberis_arm64.so",
+        "source": git_info(android_root / "frameworks" / "libs" / "binary_translation"),
+        "vulkan_registry": file_info(
+            overlay_dir / "prebuilts" / "vulkan_registry_android16" / "vk.xml"
+        ),
+    }
+
+
 def native_bridge_info(android_root: Path) -> dict[str, Any]:
     bridge = android_root / "vendor" / "lineage_desktop" / "prebuilts" / "native_bridge"
     manifest_path = bridge / "manifest.json"
@@ -144,6 +161,8 @@ def native_bridge_info(android_root: Path) -> dict[str, Any]:
         "ld_config_arm64": bridge / "system" / "etc" / "ld.config.arm64.txt",
     }
     return {
+        "translator": "ndk_translation",
+        "native_bridge": "libndk_translation.so",
         "manifest": manifest,
         "files": {name: file_info(path) for name, path in files.items()},
     }
@@ -200,6 +219,7 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "include_x86_arm_native_bridge": os.environ.get(
             "INCLUDE_X86_ARM_NATIVE_BRIDGE", "1"
         ),
+        "x86_arm_translator": x86_arm_translator(),
         "build_native_bridge_tests": os.environ.get(
             "BUILD_NATIVE_BRIDGE_TESTS", "0"
         ),
@@ -269,7 +289,10 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
         metadata["mindthegapps"] = mindthegapps_info(android_root, args.arch)
 
     if args.arch == "x86_64":
-        metadata["native_bridge"] = native_bridge_info(android_root)
+        if x86_arm_translator() == "ndk_translation":
+            metadata["native_bridge"] = native_bridge_info(android_root)
+        else:
+            metadata["native_bridge"] = digitalis_info(android_root, overlay_dir)
 
     return metadata
 
@@ -299,8 +322,13 @@ def write_text_summary(metadata: dict[str, Any], path: Path) -> None:
         lines.append(f"MindTheGapps commit: {mtg_source.get('commit', 'unknown')}")
     if metadata["arch"] == "x86_64":
         bridge = metadata.get("native_bridge", {})
-        bridge_file = bridge.get("files", {}).get("libndk_translation", {})
-        lines.append(f"Native bridge present: {bridge_file.get('present', False)}")
+        translator = bridge.get("translator", "ndk_translation")
+        if translator == "ndk_translation":
+            bridge_file = bridge.get("files", {}).get("libndk_translation", {})
+            lines.append(f"Native bridge present: {bridge_file.get('present', False)}")
+        else:
+            commit = bridge.get("source", {}).get("commit", "unknown")
+            lines.append(f"ARM translator: {translator} {commit}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

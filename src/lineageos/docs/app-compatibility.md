@@ -1,8 +1,8 @@
 # Desktop App Compatibility Matrix
 
 This matrix tracks apps by architecture and by graphics path. Keep it updated
-when a crash is fixed, a new native bridge payload is adopted, or an app changes
-major versions.
+when a crash is fixed, the ARM64 translator changes, or an app changes major
+versions.
 
 The desktop ROM intentionally presents a tablet-like, non-telephony feature set
 to package managers. Do not expose `android.hardware.type.pc`; Play treats that
@@ -20,6 +20,11 @@ as a desktop/PC device and filters some phone/tablet apps before installation.
 One row per app. The four dot columns are architecture × graphics path:
 
 - **ARM** — ARM64 ROM  ·  **X86** — x86-64 ROM (ARM-only apps run translated)
+
+The X86 grades below were taken with Google's `libndk_translation`. The x86-64
+ROM now translates with Digitalis (`X86_ARM_TRANSLATOR`, see the ROM README),
+so an X86 cell holds until it is re-graded under Digitalis; note the translator
+when you re-grade.
 - **gfx** — `--gpu_mode=gfxstream`  ·  **agl** — `--gpu_mode=gfxstream_guest_angle`
 
 Results do not carry across either axis, so grade each cell separately. Grade
@@ -366,7 +371,9 @@ results carry across neither axis, so a pass elsewhere is not evidence here.
    meant to test, since an upgrade that leaves the composite disk stale makes
    `ika start` refuse with the offending file named — run `ika reset` then.
 2. On x86-64 confirm native bridge is live before installing anything ARM-only:
-   `getprop ro.product.cpu.abilist` must list `arm64-v8a` alongside `x86_64`.
+   `getprop ro.product.cpu.abilist` must list `arm64-v8a` alongside `x86_64`,
+   and `getprop ro.dalvik.vm.native.bridge` names the translator
+   (`libberberis_arm64.so` for Digitalis).
 3. Open the launcher and app drawer. Launch Settings, Files, Chromium, and
    Google Play. Confirm Play is signed in before going further: installs and
    updates run through it, and a signed-out device silently changes what the

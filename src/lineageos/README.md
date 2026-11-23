@@ -211,15 +211,16 @@ phase.
 
 The script downloads LineageOS 23.2, installs this overlay and the selected
 provider manifest, syncs official LineageOS sources, overlays the local
-`lineage_desktop` tree, applies the patches in `patches/`, installs the x86-64
-ARM64 native bridge payload when that target is requested, and builds the
-requested Cuttlefish product or products.
+`lineage_desktop` tree, applies the patches in `patches/`, and builds the
+requested Cuttlefish product or products. With `X86_ARM_TRANSLATOR=ndk_translation`
+it first installs Google's translator payload for the x86-64 product.
 
 Before compiling, the script runs `scripts/lib/validate_build_inputs.sh` to verify
 that source patches are applied, required desktop aconfig flags are enabled,
 patched XML files do not reference missing local XML resources, userdata remains
 the default ~64 GB ext4 image, selected provider and WebView prebuilts are
-valid, and the x86-64 native bridge payload is complete. Set
+valid, and the x86-64 ROM's ARM64 translator sources (or, with
+`X86_ARM_TRANSLATOR=ndk_translation`, Google's payload) are complete. Set
 `VALIDATE_BUILD_INPUTS=0` only for local experiments.
 
 The build signs target-files and extracted images before packaging the final
@@ -270,8 +271,9 @@ picks up the bundle matching the build host's architecture from that
 location. Each bundle includes `build-info.json`, `build-info.txt`, and, when
 `repo` can produce it, `source-manifest.xml`. These files record image
 checksums, the exact top-level Ika source commit captured when the build starts,
-overlay commit state, microG APK checksums, WebView APK checksums, and x86-64
-native bridge metadata.
+overlay commit state, microG APK checksums, WebView APK checksums, and the
+x86-64 ROM's ARM64 translator (Digitalis's source commit, or the checksums of
+Google's payload).
 
 Override the destination with `OUTPUT_DIR=/some/other/dir` if you want the
 bundles somewhere other than the checkout's `src/`. Signed target-files
@@ -314,6 +316,7 @@ MICROG_FDROID_RELEASE=latest
 MICROG_FDROID_PRIVILEGED_RELEASE=latest
 MICROG_PREBUILT_CACHE_DIR=/path/to/ika/src/ika-work/microg-prebuilts
 INCLUDE_X86_ARM_NATIVE_BRIDGE=1
+X86_ARM_TRANSLATOR=digitalis          # or ndk_translation
 UPDATE_NATIVE_BRIDGE_PREBUILTS=1
 NATIVE_BRIDGE_SOURCE_DIR=/path/to/extracted/android/system
 NATIVE_BRIDGE_SDK_PACKAGE=/path/or/url/to/google_apis_x86_64_system_image.zip
@@ -364,8 +367,22 @@ manifest with no upstream request—not even a release-metadata or F-Droid index
 lookup. `latest` always re-queries metadata so a newer upstream release is not
 missed, though an unchanged version still skips the download.
 
-`INCLUDE_X86_ARM_NATIVE_BRIDGE=1` is the default for the x86-64 product. The
-build helper runs `scripts/update_native_bridge_prebuilts.py`, which downloads
+`INCLUDE_X86_ARM_NATIVE_BRIDGE=1` is the default for the x86-64 product: it
+runs ARM64-only apps through an ARM64-to-x86-64 translator, Android's native
+bridge. `X86_ARM_TRANSLATOR` picks the translator.
+
+`digitalis`, the default, is Digitalis, the open (Apache-2.0) ARM64 backend for
+AOSP's Berberis translator. The manifest takes `frameworks/libs/binary_translation`
+from DigitalisX64 at a pinned commit, and the product builds `libberberis_arm64.so`,
+its proxy libraries and the ARM64 guest libraries from source, with nothing to
+download. Its Vulkan proxy is generated from Android 16's Vulkan registry in
+`prebuilts/vulkan_registry_android16`, as the generator cannot read the newer
+registry Ika pins for Mesa. The product sets
+`ro.dalvik.vm.native.bridge=libberberis_arm64.so`. `docs/digitalis.md`
+compares it with Google's translator.
+
+`ndk_translation` is Google's closed translator. The build helper runs
+`scripts/update_native_bridge_prebuilts.py`, which downloads
 the pinned Android 16 API 36.1 Google APIs x86-64 revision-4 system image,
 verifies its catalog SHA-1 and independently pinned SHA-256, extracts
 Google's `libndk_translation.so` runtime, proxy libraries, and binfmt/init glue,
@@ -380,7 +397,9 @@ metadata so the x86-64 build creates that proxy from AOSP's native bridge
 support sources and links it to Google's translator runtime. The product imports
 the generated translator payload and sets
 `ro.dalvik.vm.native.bridge=libndk_translation.so` without changing any
-partition or disk image sizes. The overlay also patches ART's native loader for
+partition or disk image sizes.
+
+With either translator, the overlay also patches ART's native loader for
 bridged app namespaces so extracted ARM64 app libraries are used directly and
 APK zip library search paths are not handed to the translated ARM64 linker. For
 apps whose selected ABI is translated, PackageManager forces native library
@@ -390,9 +409,10 @@ For offline or pinned builds, set `NATIVE_BRIDGE_SDK_PACKAGE` to a local SDK zip
 or set `NATIVE_BRIDGE_SOURCE_DIR` to an already-extracted Android system image
 root that contains `lib64/libndk_translation.so`. Set both digest variables
 when overriding the package; leaving either empty explicitly skips that digest.
-Manual x86-64 builds need
+Manual x86-64 builds with Google's translator need
+`LINEAGE_DESKTOP_X86_ARM_TRANSLATOR=ndk_translation` and
 `USE_NDK_TRANSLATION_BINARY=true` exported before `lunch`; the one-command build
-script sets it automatically.
+script sets them.
 
 Native bridge support is a compatibility feature, not a guarantee that every
 ARM64 app will run on x86-64. Apps may still fail due to Play Integrity,
@@ -419,7 +439,7 @@ curl -L -o .repo/local_manifests/lineageos4microg.xml \
 repo sync -c -j"$(nproc)"
 vendor/lineage_desktop/scripts/apply_source_patches.sh
 vendor/lineage_desktop/scripts/update_microg_prebuilts.py
-vendor/lineage_desktop/scripts/update_native_bridge_prebuilts.py
+vendor/lineage_desktop/scripts/update_native_bridge_prebuilts.py  # only for X86_ARM_TRANSLATOR=ndk_translation
 ```
 
 The manifest checks out `DesktopECHO/ika` under `vendor/ika` and links this
@@ -450,8 +470,8 @@ src/lineageos/scripts/rebuild_cf_desktop_x86_64.sh
 These are thin wrappers around `build_lineageos_desktop.sh` run with `REBUILD=1`,
 which reuses the existing tree (skips repo sync and source patching) and then
 builds, signs, and bundles exactly as a full run. Override with `SKIP_SYNC=0` /
-`SKIP_PATCH=0` to re-enable either step. The x86-64 helper still refreshes the
-native bridge payload unless `INCLUDE_X86_ARM_NATIVE_BRIDGE=0` is set, and the
+`SKIP_PATCH=0` to re-enable either step. With `X86_ARM_TRANSLATOR=ndk_translation`
+the x86-64 helper still refreshes Google's payload, and the
 host/target matrix is enforced (x86-64 builds on x86-64 hosts only; arm64 builds
 on x86-64 and arm64 hosts).
 
@@ -492,6 +512,9 @@ src/lineageos-x86_64/testcases/native_bridge/run-tests.sh -s 127.0.0.1:6520
 
 The static suite isolates ARM64 instruction and syscall translation. The
 dynamic suite additionally exercises the translated linker and host proxy
-libraries. When the diagnostics are requested, the build fails packaging if
-either executable or its integrity manifest is absent. The bridge runtime and
+libraries. The suite's manifest lists the translator files the build installed
+(for Google's translator, the pinned payload's), and `run-tests.sh` checks the
+guest runs those files and the matching `ro.dalvik.vm.native.bridge` before
+it runs the suites. When the diagnostics are requested, the build fails
+packaging if either executable or its integrity manifest is absent. The bridge runtime and
 its Vulkan/EGL/GLES proxies remain mandatory for every native-bridge build.

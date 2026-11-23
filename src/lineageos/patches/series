@@ -175,5 +175,6 @@ build/make patches/build-make-arm64-host.patch
 build/make patches/build-make-zipalign-device.patch
 trusty/user/base patches/trusty-user-base-arm64-host-boringssl.patch
 frameworks/libs/binary_translation patches/frameworks-libs-binary-translation-arm64-host.patch
+frameworks/libs/binary_translation patches/frameworks-libs-binary-translation-vulkan-registry.patch
 build/make patches/build-make-releasetools.patch
 build/release patches/build-release.patch

@@ -112,6 +112,14 @@ for binary in ndk_program_tests_static ndk_program_tests; do
   }
 done
 
+# Bundles of the default translator (Digitalis) name it in their manifest;
+# Google's SDK payload manifest does not, and means libndk_translation.
+expected_bridge="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("native_bridge", "libndk_translation.so"))' "$manifest")"
+case "$expected_bridge" in
+  libberberis_arm64.so) expected_runner=berberis_program_runner_binfmt_misc_arm64 ;;
+  *) expected_runner=ndk_translation_program_runner_binfmt_misc_arm64 ;;
+esac
+
 abi="$(adb_cmd shell getprop ro.product.cpu.abi | tr -d '\r')"
 abilist="$(adb_cmd shell getprop ro.product.cpu.abilist | tr -d '\r')"
 bridge="$(adb_cmd shell getprop ro.dalvik.vm.native.bridge | tr -d '\r')"
@@ -120,7 +128,7 @@ exec_enabled="$(adb_cmd shell getprop ro.enable.native.bridge.exec | tr -d '\r')
 
 [[ "$abi" == "x86_64" ]] || { printf 'Expected x86_64 host ABI, got %s\n' "$abi" >&2; exit 1; }
 [[ ",$abilist," == *,arm64-v8a,* ]] || { printf 'ARM64 is absent from abilist: %s\n' "$abilist" >&2; exit 1; }
-[[ "$bridge" == "libndk_translation.so" ]] || { printf 'Unexpected native bridge: %s\n' "$bridge" >&2; exit 1; }
+[[ "$bridge" == "$expected_bridge" ]] || { printf 'Unexpected native bridge: %s (expected %s)\n' "$bridge" "$expected_bridge" >&2; exit 1; }
 [[ "$isa" == "x86_64" ]] || { printf 'Unexpected ARM64 ISA mapping: %s\n' "$isa" >&2; exit 1; }
 [[ "$exec_enabled" == "1" ]] || { printf 'Translated executable support is disabled\n' >&2; exit 1; }
 
@@ -150,7 +158,7 @@ for registration in arm64_exe arm64_dyn; do
       printf 'ARM64 binfmt registration is unavailable: %s\n' "$registration" >&2
       exit 1
     }
-    [[ "$registration_state" == *ndk_translation_program_runner_binfmt_misc_arm64* ]] || {
+    [[ "$registration_state" == *"$expected_runner"* ]] || {
       printf 'ARM64 binfmt registration uses the wrong interpreter: %s\n' "$registration" >&2
       exit 1
     }

@@ -10,9 +10,23 @@
   <remote name="desktopecho" fetch="https://github.com/DesktopECHO" />
   <remote name="khronos" fetch="https://github.com" />
   <remote name="mesa" fetch="https://gitlab.freedesktop.org" />
+  <remote name="digitalis" fetch="https://github.com/DigitalisX64" />
 
   <remove-project name="platform/external/vulkan-headers" />
   <remove-project name="platform/external/mesa3d" />
+  <remove-project name="platform/frameworks/libs/binary_translation" />
+
+  <!-- Digitalis, the open ARM64 backend for AOSP's Berberis, in place of
+       AOSP's RISC-V-only Berberis: the x86-64 ROM's ARM translator
+       (config/x86_arm_native_bridge.mk). Its android16 branch is on the same
+       Android 16 QPR2 base as LineageOS 23.2. -->
+  <project
+      path="frameworks/libs/binary_translation"
+      name="platform_frameworks_libs_binary_translation"
+      remote="digitalis"
+      revision="246557a31ba5ba055b897d377fb8ced8afbcb5be"
+      upstream="android16"
+      groups="pdk" />
 
     <!-- The Mesa release in src/tools/mesa/release.env, which the host's
        Mesa builds use too: scripts/mesa3d/regenerate.sh writes this revision

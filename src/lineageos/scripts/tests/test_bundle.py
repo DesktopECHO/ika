@@ -151,6 +151,90 @@ printf stale > {bash_path(installed)}
 """
             subprocess.run(["bash", "-c", script], check=True)
 
+    def make_digitalis_product(self, product_out: Path, bridge: str) -> None:
+        files = [
+            "bin/arm64/app_process64",
+            "bin/arm64/linker64",
+            "bin/berberis_program_runner_binfmt_misc_arm64",
+            "etc/binfmt_misc/arm64_dyn",
+            "etc/binfmt_misc/arm64_exe",
+            "etc/init/berberis.rc",
+            "etc/ld.config.arm64.txt",
+            "lib64/libberberis_arm64.so",
+            "lib64/libberberis_exec_region.so",
+        ]
+        files += [
+            f"lib64/libberberis_proxy_{lib}.so"
+            for lib in ("libEGL", "libGLESv2", "libandroid", "libc", "libm",
+                        "libnativewindow", "libvulkan")
+        ]
+        files += [
+            f"lib64/arm64/{lib}.so"
+            for lib in ("libEGL", "libGLESv2", "libandroid", "libc", "libdl", "libm",
+                        "libnativewindow", "libvulkan")
+        ]
+        for relpath in files:
+            path = product_out / "system" / relpath
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(relpath.encode())
+        (product_out / "system/build.prop").write_text(
+            "ro.product.cpu.abilist=x86_64,arm64-v8a\n"
+        )
+        (product_out / "product/etc").mkdir(parents=True)
+        (product_out / "product/etc/build.prop").write_text(
+            f"ro.dalvik.vm.native.bridge={bridge}\n"
+            "ro.dalvik.vm.isa.arm64=x86_64\n"
+            "ro.enable.native.bridge.exec=1\n"
+        )
+
+    def test_digitalis_is_the_default_translator(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            product_out = root / "product"
+            self.make_digitalis_product(product_out, "libberberis_arm64.so")
+            manifest = root / "manifest.json"
+
+            script = f"""
+set -e
+unset X86_ARM_TRANSLATOR x86_arm_translator
+workspace={bash_path(root)}
+source {bash_path(BUNDLE_SH)}
+[[ "$(native_bridge_translator)" == digitalis ]]
+native_bridge_image_outputs_complete {bash_path(product_out)}
+write_native_bridge_output_manifest {bash_path(product_out)} {bash_path(manifest)}
+x86_arm_translator=ndk_translation
+! native_bridge_image_outputs_complete {bash_path(product_out)}
+"""
+            subprocess.run(["bash", "-c", script], check=True)
+
+            data = json.loads(manifest.read_text())
+            self.assertEqual(data["format_version"], 1)
+            self.assertEqual(data["native_bridge"], "libberberis_arm64.so")
+            paths = {entry["path"] for entry in data["files"]}
+            self.assertIn("lib64/libberberis_arm64.so", paths)
+            self.assertIn("lib64/libberberis_proxy_libvulkan.so", paths)
+            self.assertIn("etc/init/berberis.rc", paths)
+            self.assertNotIn("lib64/arm64/libc.so", paths)
+            entry = next(e for e in data["files"] if e["path"] == "lib64/libberberis_arm64.so")
+            self.assertEqual(
+                entry["sha256"], hashlib.sha256(b"lib64/libberberis_arm64.so").hexdigest()
+            )
+
+    def test_digitalis_image_needs_its_bridge_property(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            product_out = root / "product"
+            self.make_digitalis_product(product_out, "libndk_translation.so")
+
+            script = f"""
+set -e
+workspace={bash_path(root)}
+x86_arm_translator=digitalis
+source {bash_path(BUNDLE_SH)}
+! native_bridge_image_outputs_complete {bash_path(product_out)}
+"""
+            subprocess.run(["bash", "-c", script], check=True)
+
 
 if __name__ == "__main__":
     unittest.main()

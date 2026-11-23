@@ -348,7 +348,7 @@ native_bridge_test_outputs_complete() {
 
   # Despite the x86_64 test-suite directory used by Tradefed, these must be
   # ARM64 guest executables. Shipping a native x86 test here would give a false
-  # green result without ever entering libndk_translation.
+  # green result without ever entering the ARM64 translator.
   local readelf_bin
   readelf_bin="$(command -v llvm-readelf || command -v readelf || true)"
   [[ -n "$readelf_bin" ]] || return 1
@@ -356,28 +356,62 @@ native_bridge_test_outputs_complete() {
   "$readelf_bin" -h "$static" 2>/dev/null | grep -Eq 'Machine:[[:space:]]+AArch64' || return 1
 }
 
+# The x86-64 ROM's ARM64 translator: digitalis (built from source, the default)
+# or ndk_translation (Google's, from an SDK image).
+native_bridge_translator() {
+  printf '%s\n' "${x86_arm_translator:-${X86_ARM_TRANSLATOR:-digitalis}}"
+}
+
+# The library ro.dalvik.vm.native.bridge names for that translator.
+native_bridge_library() {
+  case "$(native_bridge_translator)" in
+    ndk_translation) printf '%s\n' libndk_translation.so ;;
+    *) printf '%s\n' libberberis_arm64.so ;;
+  esac
+}
+
+# The translator's own files, relative to system/. Proxies are listed for the
+# libraries every graphical app loads.
+native_bridge_translator_files() {
+  local prefix proxy
+  case "$(native_bridge_translator)" in
+    ndk_translation)
+      printf '%s\n' \
+        bin/ndk_translation_program_runner_binfmt_misc_arm64 \
+        etc/cpuinfo.arm64.txt \
+        etc/berberis/cpuinfo.arm64.txt \
+        etc/init/ndk_translation.rc \
+        lib64/libndk_translation.so
+      prefix=libndk_translation_proxy_
+      ;;
+    *)
+      printf '%s\n' \
+        bin/berberis_program_runner_binfmt_misc_arm64 \
+        etc/init/berberis.rc \
+        lib64/libberberis_arm64.so \
+        lib64/libberberis_exec_region.so
+      prefix=libberberis_proxy_
+      ;;
+  esac
+  for proxy in libEGL libGLESv2 libandroid libc libm libnativewindow libvulkan; do
+    printf 'lib64/%s%s.so\n' "$prefix" "$proxy"
+  done
+}
+
 native_bridge_image_outputs_complete() {
   local product_out="$1"
   local required
 
+  while read -r required; do
+    [[ -s "$product_out/system/$required" ]] || return 1
+  done < <(native_bridge_translator_files)
+
   for required in \
     system/bin/arm64/app_process64 \
     system/bin/arm64/linker64 \
-    system/bin/ndk_translation_program_runner_binfmt_misc_arm64 \
-    system/etc/cpuinfo.arm64.txt \
-    system/etc/berberis/cpuinfo.arm64.txt \
     system/etc/binfmt_misc/arm64_dyn \
     system/etc/binfmt_misc/arm64_exe \
-    system/etc/init/ndk_translation.rc \
     system/etc/ld.config.arm64.txt \
-    system/lib64/libndk_translation.so \
-    system/lib64/libndk_translation_proxy_libEGL.so \
-    system/lib64/libndk_translation_proxy_libGLESv2.so \
-    system/lib64/libndk_translation_proxy_libandroid.so \
-    system/lib64/libndk_translation_proxy_libc.so \
-    system/lib64/libndk_translation_proxy_libm.so \
-    system/lib64/libndk_translation_proxy_libnativewindow.so \
-    system/lib64/libndk_translation_proxy_libvulkan.so \
     system/lib64/arm64/libEGL.so \
     system/lib64/arm64/libGLESv2.so \
     system/lib64/arm64/libandroid.so \
@@ -392,12 +426,60 @@ native_bridge_image_outputs_complete() {
 
   grep -Eq '(^|,)arm64-v8a(,|$)' "$product_out/system/build.prop" || return 1
   local product_properties="$product_out/product/etc/build.prop"
-  grep -q '^ro.dalvik.vm.native.bridge=libndk_translation.so$' \
+  grep -qx "ro.dalvik.vm.native.bridge=$(native_bridge_library)" \
     "$product_properties" || return 1
   grep -q '^ro.dalvik.vm.isa.arm64=x86_64$' "$product_properties" || return 1
   grep -q '^ro.enable.native.bridge.exec=1$' "$product_properties" || return 1
 
-  native_bridge_image_outputs_match_manifest "$product_out"
+  # Google's payload must be exactly the pinned SDK image's. Digitalis is built
+  # from the pinned source, so it has no payload manifest to compare with.
+  if [[ "$(native_bridge_translator)" == "ndk_translation" ]]; then
+    native_bridge_image_outputs_match_manifest "$product_out"
+  fi
+}
+
+# Writes a manifest, in the format of the SDK payload's manifest.json, of the
+# translator files built into product_out, so the on-device test suite can
+# check that the guest runs this build's translator.
+write_native_bridge_output_manifest() {
+  local product_out="$1"
+  local manifest="$2"
+
+  python3 - "$product_out/system" "$manifest" "$(native_bridge_translator)" \
+    "$(native_bridge_library)" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+system, manifest = Path(sys.argv[1]), Path(sys.argv[2])
+translator, library = sys.argv[3], sys.argv[4]
+patterns = (
+    "lib64/libberberis_*.so",
+    "bin/berberis_program_runner_*",
+    "etc/init/berberis.rc",
+    "etc/ld.config.arm64.txt",
+    "etc/binfmt_misc/arm64_*",
+)
+paths = sorted({p for pattern in patterns for p in system.glob(pattern) if p.is_file()})
+if not paths:
+    print(f"[lineage-desktop] no ARM64 translator files under {system}", file=sys.stderr)
+    raise SystemExit(1)
+files = []
+for path in paths:
+    data = path.read_bytes()
+    files.append({
+        "path": str(path.relative_to(system)),
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    })
+manifest.write_text(json.dumps({
+    "format_version": 1,
+    "translator": translator,
+    "native_bridge": library,
+    "files": files,
+}, indent=2, sort_keys=True) + "\n")
+PY
 }
 
 native_bridge_image_outputs_match_manifest() {
@@ -722,18 +804,24 @@ copy_native_bridge_test_outputs() {
     -name ndk_program_tests -print -quit)"
   static="$(find "$product_out/testcases/ndk_program_tests_static.native_bridge" -type f \
     -name ndk_program_tests_static -print -quit)"
-  manifest="$workspace/vendor/lineage_desktop/prebuilts/native_bridge/manifest.json"
-  [[ -s "$manifest" ]] || die "missing native-bridge payload manifest: $manifest"
-
   test_dir="$bundle_dir/testcases/native_bridge"
   mkdir -p "$test_dir"
+  if [[ "$(native_bridge_translator)" == "ndk_translation" ]]; then
+    manifest="$workspace/vendor/lineage_desktop/prebuilts/native_bridge/manifest.json"
+    [[ -s "$manifest" ]] || die "missing native-bridge payload manifest: $manifest"
+  else
+    manifest="$test_dir/manifest.json"
+    write_native_bridge_output_manifest "$product_out" "$manifest" || \
+      die "could not record the ARM64 translator files of $product_out"
+  fi
   cp --reflink=auto --sparse=always --preserve=timestamps -- "$dynamic" \
     "$test_dir/ndk_program_tests"
   cp --reflink=auto --sparse=always --preserve=timestamps -- "$static" \
     "$test_dir/ndk_program_tests_static"
   cp --preserve=timestamps -- \
     "$script_dir/smoke_native_bridge.sh" "$test_dir/run-tests.sh"
-  copy_bundle_file_thin "$manifest" "$test_dir/manifest.json"
+  [[ "$manifest" == "$test_dir/manifest.json" ]] || \
+    copy_bundle_file_thin "$manifest" "$test_dir/manifest.json"
   chmod 0755 \
     "$test_dir/ndk_program_tests" \
     "$test_dir/ndk_program_tests_static" \

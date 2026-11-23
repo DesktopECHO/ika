@@ -16,8 +16,10 @@ Before building:
    is selected unless an explicit release tag is pinned; choose the other module
    versions as needed. Build metadata records the selected provider and its
    resolved source information.
-4. Choose the native bridge SDK payload for x86-64, or set
-   `NATIVE_BRIDGE_SOURCE_DIR` to a vetted extracted payload.
+4. The x86-64 ROM's ARM64 translator is Digitalis, built from the commit the
+   manifest pins. With `X86_ARM_TRANSLATOR=ndk_translation`, choose Google's
+   SDK payload instead, or set `NATIVE_BRIDGE_SOURCE_DIR` to a vetted extracted
+   payload.
 5. Set `BUILD_NATIVE_BRIDGE_TESTS=1` for publishable builds so the native-bridge
    regression diagnostics are included. Vulkan CTS/dEQP diagnostics are included
    by default (`BUILD_VULKAN_TESTS=1`); set `BUILD_VULKAN_TESTS=0` to exclude them.
@@ -25,7 +27,7 @@ Before building:
 
 The build script runs `scripts/lib/validate_build_inputs.sh` before compiling. It
 checks patch application state, userdata policy, selected provider prebuilts,
-WebView prebuilts, native bridge files for x86-64, and required desktop aconfig
+WebView prebuilts, the x86-64 ARM64 translator's sources or payload, and required desktop aconfig
 flags.
 
 Each generated Cuttlefish bundle contains:
@@ -37,7 +39,8 @@ Each generated Cuttlefish bundle contains:
 - image checksums for files copied into the bundle
 - selected provider source and prebuilt metadata
 - WebView APK checksum for the target architecture
-- native bridge payload metadata for x86-64
+- the x86-64 ARM64 translator: Digitalis's source commit, or Google's payload
+  metadata
 - Vulkan CTS artifacts (included by default; omitted when `BUILD_VULKAN_TESTS=0`)
 - ARM64 static/dynamic native-bridge regression suites on x86-64 when
   `BUILD_NATIVE_BRIDGE_TESTS=1`
@@ -45,7 +48,7 @@ Each generated Cuttlefish bundle contains:
 Release reviewers should compare these files between ARM64 and x86-64 before
 publishing. The recorded Ika source commit must match. Expected differences are
 the target product and architecture, kernel artifacts, WebView architecture
-prebuilt, and x86-64 native bridge metadata.
+prebuilt, and x86-64 translator metadata.
 
 Before publishing x86-64, boot the final bundle and run
 `testcases/native_bridge/run-tests.sh -s SERIAL`. Run at least one Vulkan CTS

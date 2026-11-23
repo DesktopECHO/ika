@@ -78,6 +78,59 @@ class WriteReleaseMetadataTest(unittest.TestCase):
                 metadata["build_options"]["build_native_bridge_tests"], "0"
             )
 
+    def test_x86_64_records_digitalis_by_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            android_root = root / "android"
+            overlay_dir = android_root / "vendor/lineage_desktop"
+            translation = android_root / "frameworks/libs/binary_translation"
+            registry = overlay_dir / "prebuilts/vulkan_registry_android16/vk.xml"
+            product_out = android_root / "out/target/product/ika_x86_64"
+            bundle_dir = root / "bundle"
+            for path in (root / "ika", registry.parent, translation, product_out, bundle_dir):
+                path.mkdir(parents=True, exist_ok=True)
+            registry.write_text("<registry/>\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=translation, check=True)
+            subprocess.run(
+                ["git", "-c", "user.email=tests@example.invalid", "-c", "user.name=Ika Tests",
+                 "commit", "-q", "--allow-empty", "-m", "digitalis"],
+                cwd=translation,
+                check=True,
+            )
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=translation, text=True
+            ).strip()
+
+            args = argparse.Namespace(
+                ika_root=str(root / "ika"),
+                android_root=str(android_root),
+                overlay_dir=str(overlay_dir),
+                product_out=str(product_out),
+                bundle_dir=str(bundle_dir),
+                arch="x86_64",
+                product="lineage_desktop_cf_x86_64",
+                lineage_branch="lineage-23.2",
+                image=[],
+            )
+            env = {k: v for k, v in os.environ.items() if k != "X86_ARM_TRANSLATOR"}
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                MODULE,
+                "write_source_manifest",
+                return_value={"path": None, "reason": "test"},
+            ):
+                metadata = MODULE.build_metadata(args)
+
+            self.assertEqual(metadata["build_options"]["x86_arm_translator"], "digitalis")
+            bridge = metadata["native_bridge"]
+            self.assertEqual(bridge["translator"], "digitalis")
+            self.assertEqual(bridge["native_bridge"], "libberberis_arm64.so")
+            self.assertEqual(bridge["source"]["commit"], commit)
+            self.assertTrue(bridge["vulkan_registry"]["present"])
+
+            summary = bundle_dir / "build-info.txt"
+            MODULE.write_text_summary(metadata, summary)
+            self.assertIn(f"ARM translator: digitalis {commit}", summary.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

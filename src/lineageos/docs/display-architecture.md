@@ -174,10 +174,10 @@ ROM builds include the Vulkan dEQP binary and CTS dEQP package by default
 (`BUILD_VULKAN_TESTS=1`); set `BUILD_VULKAN_TESTS=0` to leave them out.
 Set `BUILD_NATIVE_BRIDGE_TESTS=1` to additionally ship the ARM64 static and
 dynamic NDK suites under `testcases/native_bridge/`; `run-tests.sh` verifies
-every installed translator file against the pinned payload manifest, checks the
-ABI/property contract, and executes both binaries through `libndk_translation`,
-covering translated instructions, syscalls, the guest linker, and proxy-library
-loading.
+every installed translator file against the bundle's manifest, checks the
+ABI/property contract, and executes both binaries through the ARM64 translator
+(Digitalis by default), covering translated instructions, syscalls, the guest
+linker, and proxy-library loading.
 The companion gfxstream translator advertises OpenGL ES 3.2 and
 `ANDROID_EMU_gles_max_version_3_2`, with version fallback when the host cannot
 provide the complete ES 3.2 capability set.
