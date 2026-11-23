@@ -1,0 +1,137 @@
+dzn: Backport four Dozen fixes from Mesa's 26.3 branch
+
+Mesa's staging/26.3 branch, after 26.3.1. Drop this patch when release.env
+moves to a release that has them (26.3.2).
+
+- 6a5238d2 dzn: Fix pooled descriptor set vk_object_base lifecycle.
+  Resetting a descriptor pool finished every slot, including ones never
+  allocated or already freed, and destroying a pool never finished its
+  allocated sets. Placed by hand: Ika's inline-data windows sit where the
+  upstream hunk expects the bindless branch.
+- 99f97f0e dzn: Free the enhanced barrier allocation base. A barrier with
+  only buffer or only image dependencies leaked its allocation on GPUs with
+  Direct3D 12's enhanced barriers.
+- d34de522 dzn: Advertise KHR_external_memory_capabilities and
+  KHR_external_semaphore_capabilities, which Dozen already implements.
+- a96104ad dzn: Fix collect_buffer barriers around vkCmdCopyQueryPoolResults,
+  so query results copied without VK_QUERY_RESULT_WAIT_BIT, and resets and
+  copies after them, are synchronized.
+
+diff --git a/src/microsoft/vulkan/dzn_cmd_buffer.c b/src/microsoft/vulkan/dzn_cmd_buffer.c
+index 08e7517..b60d919 100644
+--- a/src/microsoft/vulkan/dzn_cmd_buffer.c
++++ b/src/microsoft/vulkan/dzn_cmd_buffer.c
+@@ -1149,6 +1149,7 @@ dzn_cmd_buffer_collect_queries(struct dzn_cmd_buffer *cmdbuf,
+                                     D3D12_BARRIER_ACCESS_COPY_SOURCE, D3D12_BARRIER_ACCESS_COPY_DEST);
+    } else {
+       dzn_cmd_buffer_flush_transition_barriers(cmdbuf, qpool->resolve_buffer, 0, 1);
++      dzn_cmd_buffer_flush_transition_barriers(cmdbuf, qpool->collect_buffer, 0, 1);
+    }
+ 
+    /* Resolve the valid query regions into the resolve buffer */
+@@ -1291,6 +1292,9 @@ dzn_cmd_buffer_gather_queries(struct dzn_cmd_buffer *cmdbuf)
+       if (result != VK_SUCCESS)
+          return result;
+ 
++      if (!cmdbuf->enhanced_barriers)
++         dzn_cmd_buffer_flush_transition_barriers(cmdbuf, qpool->collect_buffer, 0, 1);
++
+       result = dzn_cmd_buffer_collect_query_ops(cmdbuf, qpool, &state->reset, &cmdbuf->queries.reset);
+       if (result != VK_SUCCESS)
+          return result;
+@@ -1741,8 +1745,9 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
+    if (ma.size == 0)
+       return;
+ 
+-   if (!vk_multialloc_alloc(&ma, &cmdbuf->vk.pool->alloc,
+-                            VK_SYSTEM_ALLOCATION_SCOPE_COMMAND)) {
++   void *alloc_ptr = vk_multialloc_alloc(&ma, &cmdbuf->vk.pool->alloc,
++                                         VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
++   if (!alloc_ptr) {
+       vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+       return;
+    }
+@@ -1924,7 +1929,7 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
+ 
+    ID3D12GraphicsCommandList8_Barrier(cmdbuf->cmdlist8, num_barrier_groups, groups);
+ 
+-   vk_free(&cmdbuf->vk.pool->alloc, global_barriers);
++   vk_free(&cmdbuf->vk.pool->alloc, alloc_ptr);
+ }
+ 
+ static D3D12_CPU_DESCRIPTOR_HANDLE
+@@ -7053,6 +7058,9 @@ dzn_CmdResetQueryPool(VkCommandBuffer commandBuffer,
+    if (!state)
+       return;
+ 
++   if (!cmdbuf->enhanced_barriers)
++      dzn_cmd_buffer_flush_transition_barriers(cmdbuf, qpool->collect_buffer, 0, 1);
++
+    uint32_t q_step = DZN_QUERY_REFS_SECTION_SIZE / sizeof(uint64_t);
+ 
+    for (uint32_t q = 0; q < queryCount; q += q_step) {
+@@ -7127,11 +7135,9 @@ dzn_CmdCopyQueryPoolResults(VkCommandBuffer commandBuffer,
+ #undef ALL_STATS
+ 
+    if (cmdbuf->enhanced_barriers) {
+-      if (flags & VK_QUERY_RESULT_WAIT_BIT) {
+-         dzn_cmd_buffer_buffer_barrier(cmdbuf, qpool->collect_buffer,
+-                                       D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_SYNC_COPY,
+-                                       D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_ACCESS_COPY_SOURCE);
+-      }
++      dzn_cmd_buffer_buffer_barrier(cmdbuf, qpool->collect_buffer,
++                                    D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_SYNC_COPY,
++                                    D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_ACCESS_COPY_SOURCE);
+    } else {
+       dzn_cmd_buffer_queue_transition_barriers(cmdbuf, qpool->collect_buffer, 0, 1,
+                                                D3D12_RESOURCE_STATE_COPY_DEST,
+@@ -7180,7 +7186,11 @@ dzn_CmdCopyQueryPoolResults(VkCommandBuffer commandBuffer,
+       }
+    }
+ 
+-   if (!cmdbuf->enhanced_barriers) {
++   if (cmdbuf->enhanced_barriers) {
++      dzn_cmd_buffer_buffer_barrier(cmdbuf, qpool->collect_buffer,
++                                    D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_SYNC_COPY,
++                                    D3D12_BARRIER_ACCESS_COPY_SOURCE, D3D12_BARRIER_ACCESS_COPY_DEST);
++   } else {
+       dzn_cmd_buffer_queue_transition_barriers(cmdbuf, qpool->collect_buffer, 0, 1,
+                                                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                                                D3D12_RESOURCE_STATE_COPY_DEST,
+diff --git a/src/microsoft/vulkan/dzn_descriptor_set.c b/src/microsoft/vulkan/dzn_descriptor_set.c
+index 8fa1c0b..0c970c6 100644
+--- a/src/microsoft/vulkan/dzn_descriptor_set.c
++++ b/src/microsoft/vulkan/dzn_descriptor_set.c
+@@ -2039,6 +2039,9 @@ dzn_descriptor_set_init(struct dzn_descriptor_set *set,
+ static void
+ dzn_descriptor_set_finish(struct dzn_descriptor_set *set)
+ {
++   if (!set->layout)
++      return;
++
+    vk_object_base_finish(&set->base);
+    set->pool = NULL;
+    set->layout = NULL;
+@@ -2053,6 +2056,9 @@ dzn_descriptor_pool_destroy(struct dzn_descriptor_pool *pool,
+ 
+    struct dzn_device *device = container_of(pool->base.device, struct dzn_device, vk);
+ 
++   for (uint32_t s = 0; s < pool->set_count; s++)
++      dzn_descriptor_set_finish(&pool->sets[s]);
++
+    if (pool->inline_data.window_slots) {
+       for (uint32_t w = 0; w < pool->inline_data.window_count; w++) {
+          if (pool->inline_data.window_slots[w] >= 0)
+diff --git a/src/microsoft/vulkan/dzn_device.c b/src/microsoft/vulkan/dzn_device.c
+index c90a369..57ba39f 100644
+--- a/src/microsoft/vulkan/dzn_device.c
++++ b/src/microsoft/vulkan/dzn_device.c
+@@ -76,6 +76,8 @@ const VkExternalMemoryHandleTypeFlags opaque_external_flag =
+ static const struct vk_instance_extension_table instance_extensions = {
+    .KHR_get_physical_device_properties2      = true,
+    .KHR_device_group_creation                = true,
++   .KHR_external_memory_capabilities         = true,
++   .KHR_external_semaphore_capabilities      = true,
+ #ifdef DZN_USE_WSI_PLATFORM
+    .KHR_surface                              = true,
+    .KHR_get_surface_capabilities2            = true,
