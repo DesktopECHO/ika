@@ -1,0 +1,24 @@
+Patch summary:
+In the ARM guest linker of a translated app, system libraries stay loaded
+after dlclose, as they do on an ARM device, where zygote has loaded them.
+
+diff --git a/linker/linker_soinfo.cpp b/linker/linker_soinfo.cpp
+index b3b9da3a8..48d08cf52 100644
+--- a/linker/linker_soinfo.cpp
++++ b/linker/linker_soinfo.cpp
+@@ -673,6 +673,15 @@ bool soinfo::is_gnu_hash() const {
+ }
+ 
+ bool soinfo::can_unload() const {
++#if defined(__ANDROID_NATIVE_BRIDGE__)
++  // A translated app loads the guest copies of system libraries on demand, while on an
++  // ARM device zygote has loaded most of them before the app starts, and they stay for
++  // the life of the process. Apps rely on that: they keep function pointers into a
++  // system library after their own dlclose of it. Keep system libraries loaded here too.
++  if (is_linked() && strncmp(get_realpath(), "/system/", strlen("/system/")) == 0) {
++    return false;
++  }
++#endif
+   return !is_linked() ||
+          (
+              (get_rtld_flags() & (RTLD_NODELETE | RTLD_GLOBAL)) == 0

@@ -20,6 +20,10 @@ the comparison.
   Mesa (1.4.360). It stops on the new `ubm_device`/`ubm_surface` platform types, on
   `int` now requiring `vk_platform`, and on function pointers written as
   `<proto>`/`<param>`.
+- **Guest linker:** `bionic-native-bridge-keep-system-libraries.patch` keeps a system
+  library loaded once a translated app has loaded it, as on an ARM device, where zygote
+  has loaded most of them before the app starts. Some apps dlclose a system library and
+  keep calling into it; Wuthering Waves crashed at login that way.
 
 ## The test (2026-11-23)
 
