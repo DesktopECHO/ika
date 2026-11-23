@@ -118,12 +118,14 @@ frameworks/native patches/frameworks-native-vulkan-skip-bridged-layers.patch
 frameworks/native patches/frameworks-native-renderengine-unimportable-buffer.patch
 # frameworks/base is patched twice on purpose: the first patch is the generic
 # desktop framework changes (DesktopExperienceFlags, SettingsProvider seed, QS
-# changes); the second is the native-bridge-only changes (NativeLibraryHelper,
-# PackageAbiHelperImpl). They touch disjoint files, so order is not critical,
-# but keep them as separate patches so the native-bridge work can be reverted
-# independently when chasing an AOSP rebase.
+# changes); the next two are the native-bridge-only changes (NativeLibraryHelper,
+# PackageAbiHelperImpl; the multiArch one applies after native-bridge). They
+# touch files frameworks-base.patch does not, but keep them as separate patches
+# so the native-bridge work can be reverted independently when chasing an AOSP
+# rebase.
 frameworks/base patches/frameworks-base.patch
 frameworks/base patches/frameworks-base-native-bridge.patch
+frameworks/base patches/frameworks-base-native-bridge-multiarch.patch
 frameworks/base patches/frameworks-base-settingsprovider-ota.patch
 frameworks/base patches/frameworks-base-settingsprovider-pointer-speed.patch
 frameworks/base patches/frameworks-base-display-scaling-disabled.patch

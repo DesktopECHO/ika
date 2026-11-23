@@ -125,6 +125,7 @@ cross-project index.
 | [`frameworks-native-renderengine-unimportable-buffer.patch`](frameworks-native-renderengine-unimportable-buffer.patch) | `frameworks/native` | Keeps SurfaceFlinger running when RenderEngine cannot import a buffer as a texture: the texture stays invalid and is logged instead of aborting, a layer without one is left out of the frame, and a composition or tonemap whose output has none fails with `BAD_VALUE`. A buffer with no size stays fatal. |
 | [`frameworks-base.patch`](frameworks-base.patch) | `frameworks/base` | Applies the main platform and SystemUI desktop contract: desktop/freeform defaults, show-desktop shell plumbing, QS cleanup/blocklisting plus the compact media/notification/alarm audio mixer, keyguard clock suppression for desktop images, storage reporting tweaks, display/power behavior, double-tap shade toggling, status bar/shade adjustments, microG permission support, missing recents directory log cleanup, fullscreen compatibility for apps categorized as games, ScanPackageUtils 16 KB alignment checks for system apps, and a one-shot informational 16 KB page-size compatibility notification. |
 | [`frameworks-base-native-bridge.patch`](frameworks-base-native-bridge.patch) | `frameworks/base` | Adjusts package/native-library handling for x86_64-to-ARM64 native bridge installs so bridged APK native libraries are extracted as real files after ABI selection, while preserving normal native app behavior. |
+| [`frameworks-base-native-bridge-multiarch.patch`](frameworks-base-native-bridge-multiarch.patch) | `frameworks/base` | Lets an arm64-v8a-only multiArch app that targets Android 15 or later install under ARM translation: the 64-bit ABI list it is matched against has the native ABIs first and the translated ones after, so an app with x86_64 libraries still installs as x86_64. |
 | [`frameworks-base-settingsprovider-ota.patch`](frameworks-base-settingsprovider-ota.patch) | `frameworks/base` | Adds an overlayable SettingsProvider default for the automatic OTA-update setting and loads it into the global settings database. |
 | [`frameworks-base-settingsprovider-pointer-speed.patch`](frameworks-base-settingsprovider-pointer-speed.patch) | `frameworks/base` | Seeds the desktop default mouse pointer speed at the slowest position (`def_pointer_speed=-7`) so the Settings "Pointer speed" slider starts fully to the left on first boot. |
 | [`frameworks-base-display-scaling-disabled.patch`](frameworks-base-display-scaling-disabled.patch) | `frameworks/base` | `wm scaling off` takes effect. |
@@ -194,6 +195,7 @@ MindTheGapps tree (`vendor/gapps`) for x86-64 targets of `--mtg` builds:
 - Use `.` in `series` only for patches whose paths are rooted at the Android
   source checkout rather than an individual repo project.
 - Keep broad platform behavior in `frameworks-base.patch` and native-bridge
-  package manager behavior in `frameworks-base-native-bridge.patch`.
+  package manager behavior in `frameworks-base-native-bridge.patch` and
+  `frameworks-base-native-bridge-multiarch.patch`.
 - If a patch exists only to avoid a rebase conflict, say that in both the patch
   header and this README.

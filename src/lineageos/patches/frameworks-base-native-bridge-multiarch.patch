@@ -1,0 +1,44 @@
+Patch summary:
+Installs an arm64-v8a-only multiArch app on an x86_64 device with ARM
+translation. For a multiArch app that targets Android 15 or later, the
+package manager picks the ABI from the natively supported ABIs only, which
+leave out the ABIs a native bridge translates, so Google Play's arm64-only
+multiArch apps were refused with
+INSTALL_FAILED_MULTI_ARCH_NOT_MATCH_ALL_NATIVE_ABIS.
+The 64-bit list now has the native ABIs first and the translated ones after
+them: an app with x86_64 libraries still installs as x86_64. The 32-bit list
+stays native only, as a translated entry would fail every multiArch app
+without 32-bit libraries. Applies after frameworks-base-native-bridge.patch.
+DSA (desktop-subsystem-for-android) makes the same change in its
+frameworks/base patch 0004.
+
+diff --git a/services/core/java/com/android/server/pm/PackageAbiHelperImpl.java b/services/core/java/com/android/server/pm/PackageAbiHelperImpl.java
+index 93792c9..82f5cdb 100644
+--- a/services/core/java/com/android/server/pm/PackageAbiHelperImpl.java
++++ b/services/core/java/com/android/server/pm/PackageAbiHelperImpl.java
+@@ -340,7 +340,24 @@ final class PackageAbiHelperImpl implements PackageAbiHelper {
+             return sNativelySupported64BitAbis;
+         }
+ 
+-        sNativelySupported64BitAbis = getNativelySupportedAbis(Build.SUPPORTED_64_BIT_ABIS);
++        // Ika: a multiArch app that targets Android 15 or later picks its ABI from this list
++        // only, and a 64-bit ABI the native bridge translates was left out, so an app with
++        // arm64-v8a libraries alone was refused with
++        // INSTALL_FAILED_MULTI_ARCH_NOT_MATCH_ALL_NATIVE_ABIS although the translator runs it
++        // like any other arm64-v8a app. The native ABIs still come first, so an app that has
++        // them is installed with them; the translated ones follow. 32-bit ABIs stay native
++        // only: listing a translated one would make every multiArch app without 32-bit
++        // libraries fail the match.
++        final List<String> abis = new ArrayList<>();
++        for (String abi : getNativelySupportedAbis(Build.SUPPORTED_64_BIT_ABIS)) {
++            abis.add(abi);
++        }
++        for (String abi : Build.SUPPORTED_64_BIT_ABIS) {
++            if (!abis.contains(abi)) {
++                abis.add(abi);
++            }
++        }
++        sNativelySupported64BitAbis = abis.toArray(new String[0]);
+         return sNativelySupported64BitAbis;
+     }
+ 
