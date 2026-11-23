@@ -177,5 +177,6 @@ trusty/user/base patches/trusty-user-base-arm64-host-boringssl.patch
 bionic patches/bionic-native-bridge-keep-system-libraries.patch
 frameworks/libs/binary_translation patches/frameworks-libs-binary-translation-arm64-host.patch
 frameworks/libs/binary_translation patches/frameworks-libs-binary-translation-vulkan-registry.patch
+frameworks/libs/binary_translation patches/frameworks-libs-binary-translation-quiet-debug-log.patch
 build/make patches/build-make-releasetools.patch
 build/release patches/build-release.patch

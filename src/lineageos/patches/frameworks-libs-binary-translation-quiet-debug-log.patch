@@ -1,0 +1,56 @@
+Patch summary:
+Digitalis writes its debug diagnostics (translation counts, dispatch watchdog,
+proxy argument checks, dlopen timings) to the berberis.tracing trace only,
+instead of also to logcat for every translated app.
+
+diff --git a/base/include/berberis/base/tracing.h b/base/include/berberis/base/tracing.h
+index 65b18a09..6a756a7c 100644
+--- a/base/include/berberis/base/tracing.h
++++ b/base/include/berberis/base/tracing.h
+@@ -107,9 +107,8 @@ class Tracing {
+   ALOGI(__VA_ARGS__)
+ 
+ // region digitalis
+-#define TRACE_AND_ALOGD(...) \
+-  TRACE(__VA_ARGS__);        \
+-  ALOGD(__VA_ARGS__)
++// Digitalis's debug diagnostics go to the trace only (berberis.tracing), not to logcat.
++#define TRACE_AND_ALOGD(...) TRACE(__VA_ARGS__)
+ // endregion
+ 
+ #endif  // BERBERIS_BASE_TRACING_H_
+diff --git a/guest_abi/include/berberis/guest_abi/function_wrappers.h b/guest_abi/include/berberis/guest_abi/function_wrappers.h
+index 38972458..d3b9a44f 100644
+--- a/guest_abi/include/berberis/guest_abi/function_wrappers.h
++++ b/guest_abi/include/berberis/guest_abi/function_wrappers.h
+@@ -120,7 +120,7 @@ class TrampolineFuncGenerator<Res(Args...), kCallingConventionsVariant> {
+       if (addr != 0 && addr < 0x10000) {
+         Dl_info dli{};
+         dladdr(host_func, &dli);
+-        TRACE_AND_ALOGE("BAD proxy: extracted=%p raw_x0=0x%lx func=%s(%p) pc=0x%lx lr=0x%lx",
++        TRACE("BAD proxy: extracted=%p raw_x0=0x%lx func=%s(%p) pc=0x%lx lr=0x%lx",
+             (void*)addr, (unsigned long)state->cpu.x[0],
+             dli.dli_sname ? dli.dli_sname : "??", host_func,
+             (unsigned long)state->cpu.insn_addr, (unsigned long)state->cpu.x[30]);
+@@ -138,10 +138,10 @@ class TrampolineFuncGenerator<Res(Args...), kCallingConventionsVariant> {
+       if constexpr (std::is_pointer_v<std::tuple_element_t<0, std::tuple<Args...>>>) {
+         auto raw_x0 = state->cpu.x[0];
+         if (raw_x0 != 0 && raw_x0 < 0x10000) {
+-          TRACE_AND_ALOGE("BAD proxy PRE-EXTRACT: raw_x0=0x%lx func=%p pc=0x%lx lr=0x%lx",
++          TRACE("BAD proxy PRE-EXTRACT: raw_x0=0x%lx func=%p pc=0x%lx lr=0x%lx",
+               (unsigned long)raw_x0, reinterpret_cast<void*>(func),
+               (unsigned long)state->cpu.insn_addr, (unsigned long)state->cpu.x[30]);
+-          TRACE_AND_ALOGE("  x0=0x%lx x1=0x%lx x2=0x%lx x3=0x%lx x8=0x%lx x29=0x%lx",
++          TRACE("  x0=0x%lx x1=0x%lx x2=0x%lx x3=0x%lx x8=0x%lx x29=0x%lx",
+               (unsigned long)state->cpu.x[0], (unsigned long)state->cpu.x[1],
+               (unsigned long)state->cpu.x[2], (unsigned long)state->cpu.x[3],
+               (unsigned long)state->cpu.x[8], (unsigned long)state->cpu.x[29]);
+@@ -160,7 +160,7 @@ class TrampolineFuncGenerator<Res(Args...), kCallingConventionsVariant> {
+         auto extracted_guest = ToGuestAddr(gt0);
+         if (extracted_guest != state->cpu.x[0]) {
+           auto byte_diff = (const char*)params_ptr - (const char*)state->cpu.x;
+-          TRACE_AND_ALOGE("MISMATCH: x0=0x%lx extracted=0x%lx val_at_ptr=0x%lx byte_diff=%ld nargs=%zu",
++          TRACE("MISMATCH: x0=0x%lx extracted=0x%lx val_at_ptr=0x%lx byte_diff=%ld nargs=%zu",
+               (unsigned long)state->cpu.x[0],
+               (unsigned long)extracted_guest,
+               (unsigned long)*reinterpret_cast<const uint64_t*>(params_ptr),

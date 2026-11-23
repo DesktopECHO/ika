@@ -24,6 +24,9 @@ the comparison.
   library loaded once a translated app has loaded it, as on an ARM device, where zygote
   has loaded most of them before the app starts. Some apps dlclose a system library and
   keep calling into it; Wuthering Waves crashed at login that way.
+- **Logging:** `frameworks-libs-binary-translation-quiet-debug-log.patch` sends
+  Digitalis's debug diagnostics only to the trace that the `berberis.tracing` property
+  turns on, not to logcat.
 
 ## The test (2026-11-23)
 
