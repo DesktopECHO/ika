@@ -1,0 +1,71 @@
+dzn: Offer no semaphore file descriptors under WSL2, where none can be imported
+
+Under WSL2, Direct3D 12 shares a fence as a file descriptor, but
+ID3D12Device::OpenSharedHandle refuses every fence descriptor with
+E_INVALIDARG, one exported by its own device included. A probe found it so
+on an RTX 4080 Laptop GPU and a UHD 770, where heaps shared the same way
+open, and Dozen met it on a Radeon 780M. Dozen still offered timeline
+semaphores as opaque file descriptors, so vkImportSemaphoreFdKHR always
+failed, and the failed import had already released the semaphore's fence,
+which destroying the semaphore released again: a crash. In the Vulkan
+conformance tests on a Radeon 780M that was 3,582 crashes, every test that
+shares a semaphore between devices (synchronization's cross_instance and
+signal_order.shared_timeline_semaphore groups).
+
+Offer no opaque file descriptors for semaphores under WSL2 (fences had none,
+as Dozen's fences are binary). Those tests then report the feature
+unsupported. Nothing in Ika used them: gfxstream exports only binary
+semaphores, which Dozen never offered, and Venus uses sync files.
+
+--- a/src/microsoft/vulkan/dzn_sync.c
++++ b/src/microsoft/vulkan/dzn_sync.c
+@@ -365,34 +365,6 @@
+       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+    return VK_SUCCESS;
+ }
+-#else
+-static VkResult
+-dzn_sync_import_opaque_fd(struct vk_device *device, struct vk_sync *sync,
+-                          int fd)
+-{
+-   struct dzn_sync *dsync = container_of(sync, struct dzn_sync, vk);
+-   struct dzn_device *ddev = container_of(device, struct dzn_device, vk);
+-
+-   dzn_sync_finish(device, sync);
+-
+-   HANDLE handle = (HANDLE)(intptr_t)fd;
+-   if (FAILED(ID3D12Device_OpenSharedHandle(ddev->dev, handle, &IID_ID3D12Fence, (void **)&dsync->fence)))
+-      return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+-   return VK_SUCCESS;
+-}
+-
+-static VkResult
+-dzn_sync_export_opaque_fd(struct vk_device *device, struct vk_sync *sync, int *fd)
+-{
+-   struct dzn_sync *dsync = container_of(sync, struct dzn_sync, vk);
+-   struct dzn_device *ddev = container_of(device, struct dzn_device, vk);
+-   HANDLE handle;
+-   if (FAILED(ID3D12Device_CreateSharedHandle(ddev->dev, (ID3D12DeviceChild *)dsync->fence,
+-                                              NULL, GENERIC_ALL, NULL, &handle)))
+-      return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+-   *fd = (int)(intptr_t)handle;
+-   return VK_SUCCESS;
+-}
+ #endif
+ 
+ const struct vk_sync_type dzn_sync_type = {
+@@ -416,8 +388,11 @@
+    .import_win32_handle = dzn_sync_import_win32_handle,
+    .export_win32_handle = dzn_sync_export_win32_handle,
+    .set_win32_export_params = dzn_sync_prep_win32_export,
+-#else
+-   .import_opaque_fd = dzn_sync_import_opaque_fd,
+-   .export_opaque_fd = dzn_sync_export_opaque_fd,
+ #endif
++   /* There is no import_opaque_fd or export_opaque_fd. Under WSL2, Direct3D
++    * 12 shares a fence as a file descriptor but cannot open one:
++    * ID3D12Device::OpenSharedHandle refuses every fence descriptor with
++    * E_INVALIDARG, one from its own device included, on AMD, Intel and
++    * NVIDIA GPUs alike. A semaphore exported as an opaque file descriptor
++    * could never be imported. */
+ };

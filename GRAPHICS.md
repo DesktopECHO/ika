@@ -660,6 +660,14 @@ problems, which Ika's Dozen works around:
   Intel Dozen lowers multiview itself
   ([dzn-intel-no-view-instancing.patch](src/tools/mesa/dzn-intel-no-view-instancing.patch)).
 
+Under WSL2, Direct3D 12 can export a fence as a file descriptor but can't
+open one, not even one its own device exported. Mesa's Dozen offers timeline
+semaphores as opaque file descriptors that can never be imported there, and
+crashes when an import fails. Ika's Dozen offers no file descriptors for
+semaphores ([dzn-no-semaphore-fds.patch](src/tools/mesa/dzn-no-semaphore-fds.patch)),
+so Vulkan semaphores can't be shared between devices or processes. Nothing
+in Ika shares them.
+
 Ika's Dozen makes a view of a compressed texture in an uncompressed format
 that covers more than one mip level or array layer, such as a view of all
 six faces of a BC3 cube map as 128-bit integers, a null view, which reads
