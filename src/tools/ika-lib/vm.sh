@@ -41,42 +41,106 @@ composite_disk_rebuild_reason() {
   return 1
 }
 
+# metadata and misc, which assemble_cvd writes again before each boot. The disk
+# config may name them through a link (/var/tmp/cvd/.../home), so compare
+# resolved paths.
 is_generated_os_component() {
-  [[ "$1" == "${CVD_INSTANCE_DIR}/metadata" || "$1" == "${CVD_INSTANCE_DIR}/misc" ]]
+  local real
+  real="$(readlink -f "$1" 2>/dev/null)" || return 1
+  [[ "${real}" == "$(readlink -f "${CVD_INSTANCE_DIR}/metadata" 2>/dev/null)" \
+    || "${real}" == "$(readlink -f "${CVD_INSTANCE_DIR}/misc" 2>/dev/null)" ]]
 }
 
-refresh_generated_os_component_mtimes() {
-  local disk="${CVD_INSTANCE_DIR}/os_composite.img"
-  local config="${CVD_INSTANCE_DIR}/os_composite_disk_config.txt"
+# Prints the size in bytes of each partition in a composite disk's GPT header
+# file, one per line, in table order. Fails if the file holds no GPT.
+composite_partition_sizes() {
+  local header="$1"
+  local count
+  local entry_size
+  local first
+  local last
+
+  [[ -s "${header}" ]] || return 1
+  [[ "$(head -c 520 "${header}" | tail -c 8)" == "EFI PART" ]] || return 1
+  read -r count entry_size < <(od -An -t u4 -j 592 -N 8 "${header}") || return 1
+  [[ "${count}" =~ ^[0-9]+$ && "${entry_size}" =~ ^[0-9]+$ ]] || return 1
+  (( count > 0 && entry_size >= 48 && entry_size % 8 == 0 )) || return 1
+
+  # Each entry: type GUID, partition GUID, first LBA, last LBA, ... An entry
+  # with no last LBA is unused.
+  while read -r _ _ _ _ first last _; do
+    [[ "${last}" =~ ^[0-9]+$ ]] || return 1
+    (( last > 0 )) || continue
+    printf '%s\n' "$(( (last - first + 1) * 512 ))"
+  done < <(od -An -v -t u8 -w"${entry_size}" -j 1024 -N "$(( count * entry_size ))" "${header}")
+}
+
+# Keeps Android's disk, and with it the data in overlay.img, across an update
+# of the installed ROM. Cuttlefish rebuilds a composite disk, discarding the
+# overlay, whenever one of its files is newer than the disk: every
+# ika-lineageos update makes the ROM's images newer, and every boot makes
+# metadata and misc newer. When each newer file is one of those two or an
+# installed ROM image that still fits the partition the disk gave it, the
+# disk's files are touched so that Cuttlefish keeps it, and Android reads the
+# new images through it. An image that no longer fits leaves the disk as it
+# is, and protect_overlay_resume refuses to start.
+refresh_composite_disk_mtimes() {
+  local name="$1"
+  local disk="${CVD_INSTANCE_DIR}/${name}.img"
+  local config="${CVD_INSTANCE_DIR}/${name}_disk_config.txt"
+  local header="${CVD_INSTANCE_DIR}/${name}_gpt_header.img"
   local overlay="${CVD_INSTANCE_DIR}/overlay.img"
+  local product_dir
   local component
+  local real
+  local size
   local path
+  local -a partition_sizes=()
+  local index=-1
   local needs_refresh="false"
+  local updated_images=0
 
   [[ -e "${overlay}" && -e "${disk}" && -e "${config}" ]] || return 0
+  product_dir="$(readlink -f "${CVD_PRODUCT_OUT}" 2>/dev/null)" || product_dir=""
+  mapfile -t partition_sizes < <(composite_partition_sizes "${header}" 2>/dev/null)
 
   while IFS= read -r component; do
     [[ -n "${component}" ]] || continue
     [[ "${component}" != "crosvm" ]] || continue
+    index=$((index + 1))
     [[ -e "${component}" ]] || continue
     [[ "${component}" -nt "${disk}" ]] || continue
 
-    if ! is_generated_os_component "${component}"; then
-      return 0
+    if is_generated_os_component "${component}"; then
+      needs_refresh="true"
+      continue
     fi
 
+    real="$(readlink -f "${component}" 2>/dev/null)" || return 0
+    [[ -n "${product_dir}" && "${real}" == "${product_dir}/"* ]] || return 0
+    size="$(stat -L -c %s "${component}" 2>/dev/null)" || return 0
+    [[ "${size}" =~ ^[0-9]+$ && -n "${partition_sizes[index]:-}" ]] || return 0
+    (( size <= partition_sizes[index] )) || return 0
     needs_refresh="true"
+    updated_images=$((updated_images + 1))
   done < "${config}"
 
   [[ "${needs_refresh}" == "true" ]] || return 0
+  # The partition table must describe exactly the disk's files.
+  if (( updated_images > 0 && ${#partition_sizes[@]} != index + 1 )); then
+    return 0
+  fi
 
   for path in \
     "${disk}" \
-    "${CVD_INSTANCE_DIR}/os_composite_gpt_header.img" \
-    "${CVD_INSTANCE_DIR}/os_composite_gpt_footer.img"; do
+    "${CVD_INSTANCE_DIR}/${name}_gpt_header.img" \
+    "${CVD_INSTANCE_DIR}/${name}_gpt_footer.img"; do
     [[ -e "${path}" ]] && touch "${path}" 2>/dev/null || true
   done
   touch "${overlay}" 2>/dev/null || true
+  if (( updated_images > 0 )); then
+    log "${name}: ${updated_images} updated ROM images fit the existing disk; Android's data is kept"
+  fi
 }
 
 protect_overlay_resume() {
@@ -84,7 +148,10 @@ protect_overlay_resume() {
 
   [[ -e "${CVD_INSTANCE_DIR}/overlay.img" ]] || return 0
 
-  refresh_generated_os_component_mtimes
+  refresh_composite_disk_mtimes os_composite
+  if [[ -e "${CVD_INSTANCE_DIR}/ap_composite.img" ]]; then
+    refresh_composite_disk_mtimes ap_composite
+  fi
 
   if reason="$(composite_disk_rebuild_reason os_composite)"; then
     respond_console "Refusing to start because Cuttlefish would rebuild the OS disk and discard VM data."

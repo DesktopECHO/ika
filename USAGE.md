@@ -127,10 +127,13 @@ ika restart    # stop and start again, with new options if given
   they stop it, and so do logging out and shutting the computer down while
   Android runs; on Windows, so does `wsl --shutdown`, which gives it about 10
   seconds.
-- **Updating the ROM:** a new `ika-lineageos` would make Cuttlefish rebuild
-  Android's disk and discard its data, so `ika start` refuses to start after
-  one and says so. Run `ika backup` before installing it, then `ika reset` and
-  `ika restore` after (see [Factory reset](CONFIGURATION.md#factory-reset)).
+- **Updating the ROM:** after a new `ika-lineageos`, `ika start` keeps
+  Android's disk, with its apps and data, when each new image still fits the
+  partition the disk gave it; Android then boots the new ROM. When an image no
+  longer fits, Cuttlefish would rebuild the disk and discard the data, so
+  `ika start` refuses and names the image. Then run `ika reset`, with
+  `ika backup` before and `ika restore` after if you want to keep your files
+  (see [Factory reset](CONFIGURATION.md#factory-reset)).
 
 ### A session with only Ika
 

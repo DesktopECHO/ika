@@ -368,8 +368,8 @@ results carry across neither axis, so a pass elsewhere is not evidence here.
 
 1. Start the VM in the mode under test: `ika start --gpu_mode=gfxstream` or
    `--gpu_mode=gfxstream_guest_angle`. Confirm `ro.build.date` is the image you
-   meant to test, since an upgrade that leaves the composite disk stale makes
-   `ika start` refuse with the offending file named — run `ika reset` then.
+   meant to test. An upgrade whose images no longer fit the existing disk
+   makes `ika start` refuse with the image named — run `ika reset` then.
 2. On x86-64 confirm native bridge is live before installing anything ARM-only:
    `getprop ro.product.cpu.abilist` must list `arm64-v8a` alongside `x86_64`,
    and `getprop ro.dalvik.vm.native.bridge` names the translator
