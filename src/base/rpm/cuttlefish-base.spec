@@ -663,6 +663,9 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 /usr/lib/cuttlefish-metrics
 
 %changelog
+* Tue Nov 24 2026 DesktopECHO <build@desktopecho.com> - 261124-1
+- Update Ika base package metadata to 261124-1.
+
 * Mon Nov 16 2026 DesktopECHO <build@desktopecho.com> - 261116-1
 - Update Ika base package metadata to 261116-1.
 
