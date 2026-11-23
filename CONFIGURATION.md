@@ -108,6 +108,12 @@ Each virtual CPU is pinned to a host CPU: the performance cores first (the
 P-cores of an Intel hybrid CPU), one hardware thread of each core before any
 core's second, from the highest-numbered CPU down.
 
+Memory is given to Android as it uses it, and Android hands back what it frees
+(free page reporting). Where Android's memory is not backed by transparent huge
+pages, as on Linux distributions by default, every free page goes back; under
+WSL2, where Ika backs it with huge pages, free 2 MB blocks do, so a huge page is
+not split. `ikastart.log` says when every free page goes back.
+
 ### Data partition size
 
 `ika reset --data_gb=128` sets the size, in decimal gigabytes, of the data

@@ -18,6 +18,10 @@ export ADB_TEST_PUBLIC_KEY="${ADB_TEST_PUBLIC_KEY:0:700}"
 unset ADB_VENDOR_KEYS
 mkdir -p "${CVD_PRODUCT_OUT}"
 printf 'user\n' > "${CVD_PRODUCT_OUT}/ika-build-variant"
+# Huge pages behind Android's memory: no page reporting property, so the
+# bootconfig holds only the properties this test checks.
+export IKA_SHMEM_THP_FILE="${TEST_ROOT}/shmem_enabled"
+printf 'always within_size [advise] never deny force\n' > "${IKA_SHMEM_THP_FILE}"
 
 source "${ROOT}/tools/ika"
 

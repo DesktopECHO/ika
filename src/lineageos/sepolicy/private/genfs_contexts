@@ -1,2 +1,3 @@
 genfscon sysfs /module/ika_tso/parameters/uids u:object_r:sysfs_ika_tso:s0
 genfscon proc /sys/vm/swappiness u:object_r:proc_swappiness:s0
+genfscon sysfs /module/page_reporting/parameters/page_reporting_order u:object_r:sysfs_ika_page_reporting:s0

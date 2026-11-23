@@ -11,3 +11,8 @@ allow init proc_swappiness:file w_file_perms;
 # grants it no access there.
 allow prefetch vendor_file_type:dir r_dir_perms;
 allow prefetch vendor_file_type:file r_file_perms;
+
+# ika_memory.rc sets the free page reporting order ika chose for the host
+# (ro.boot.ika.page_reporting_order).
+type sysfs_ika_page_reporting, fs_type, sysfs_type;
+allow init sysfs_ika_page_reporting:file w_file_perms;

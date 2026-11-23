@@ -268,15 +268,44 @@ host_color_scheme() {
   esac
 }
 
+# Prints the free page reporting order Android should use, or nothing to keep
+# the kernel's. crosvm's balloon gives memory Android frees back to the host,
+# but the kernel reports only free blocks of at least page_reporting_order
+# pages, a whole pageblock (2 MiB) by default, so the smaller free blocks a long
+# session leaves behind stayed with the VM. Where Android's memory is not backed
+# by transparent huge pages (shmem_enabled never, the default on Linux
+# distributions), every free page is reported. Where it is (under WSL2, where
+# ika-base turns on advise), a smaller report would split huge pages, which
+# then refault one 4 KiB page at a time, so the default stays.
+guest_page_reporting_order() {
+  local thp_file="${IKA_SHMEM_THP_FILE:-/sys/kernel/mm/transparent_hugepage/shmem_enabled}"
+  local setting=""
+
+  [[ -r "${thp_file}" ]] && setting="$(<"${thp_file}")"
+  case "${setting}" in
+    *"[always]"* | *"[within_size]"* | *"[advise]"* | *"[force]"* | *"[inherit]"*)
+      return 0
+      ;;
+  esac
+  printf '0\n'
+}
+
 append_bootconfig_args() {
   local -n args_array="$1"
   local tz
+  local page_reporting_order
   local bootconfig_value=""
 
   tz="$(host_timezone)"
   if [[ -n "${tz}" ]]; then
     bootconfig_value="androidboot.timezone=\"${tz}\" androidboot.cuttlefish_service_bluetooth_checker=false"
     log "timezone: ${tz}"
+  fi
+
+  page_reporting_order="$(guest_page_reporting_order)"
+  if [[ -n "${page_reporting_order}" ]]; then
+    bootconfig_value+="${bootconfig_value:+ }androidboot.ika.page_reporting_order=${page_reporting_order}"
+    log "free page reporting: every free page (no huge pages behind Android's memory)"
   fi
 
   if is_user_build; then

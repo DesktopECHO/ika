@@ -10,6 +10,12 @@ on init
     # low for that, and Fedora, Arch and SteamOS ship this value for games.
     write /proc/sys/vm/max_map_count 1048576
 
+# The free page reporting order ika chose for the host (guest_page_reporting_order
+# in src/tools/ika-lib/vm.sh): 0 reports every free page back to the host, not
+# only free 2 MiB blocks. Without the property the kernel's default stays.
+on init && property:ro.boot.ika.page_reporting_order=*
+    write /sys/module/page_reporting/parameters/page_reporting_order ${ro.boot.ika.page_reporting_order}
+
 # Boot prefetch: record which files boot reads, and read them ahead on the
 # following boots. /system/bin/prefetch defines the services.
 on early-init && property:ro.prefetch_boot.enabled=true
