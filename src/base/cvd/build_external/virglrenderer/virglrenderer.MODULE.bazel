@@ -53,6 +53,10 @@ git_repository(
         # RTX 4080 Laptop GPU). VKR_RECORD_THREADS sets the number of
         # workers (2, 0 for none), VKR_RECORD_STATS logs the waits.
         "@//build_external/virglrenderer:PATCH.venus-parallel-recording.patch",
+        # Backport of 5028223: destroy a device's object lock after the
+        # objects left on it, whose destruction takes that lock, instead of
+        # before (a guest app that quits without destroying its Vulkan objects).
+        "@//build_external/virglrenderer:PATCH.venus-object-mutex-after-objects.patch",
     ],
     remote = "https://gitlab.freedesktop.org/virgl/virglrenderer",
 )
