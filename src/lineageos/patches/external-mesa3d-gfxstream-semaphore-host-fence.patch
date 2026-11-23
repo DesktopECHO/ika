@@ -1,0 +1,206 @@
+Patch summary:
+A Vulkan app that signals a semaphore exported as a sync fd no longer waits
+for the GPU to finish all its work at every submission. With virtio-gpu
+native sync and no fence passing, gfxstream's guest makes an exportable
+semaphore's sync fd when the semaphore is created, from a host export that
+the host does not wait on for semaphores, so the fd is signaled at once; to
+keep it honest, vkQueueSubmit waited for the queue to go idle before
+returning whenever it signaled such a semaphore. Skia does that every frame,
+in SurfaceFlinger's Vulkan RenderEngine and in every app's HWUI, so neither
+could record a frame while the GPU drew the last one: under WSL2 at 144 Hz
+SurfaceFlinger missed every frame of a window being scrolled. Now the
+submission is followed by an empty one that signals a new exportable fence,
+the host waits for that fence asynchronously, and the semaphores get its
+sync fd. A fence is used once and destroyed after its fd has signaled, as a
+reset could reach the host after the export it would race.
+
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.cpp
+@@ -2473,12 +2473,22 @@ VkResult ResourceTracker::on_vkCreateDevice(void* context, VkResult input_result
+ 
+ void ResourceTracker::on_vkDestroyDevice_pre(void* context, VkDevice device,
+                                              const VkAllocationCallbacks*) {
+-    (void)context;
+     std::lock_guard<std::recursive_mutex> lock(mLock);
+ 
+     auto it = info_VkDevice.find(device);
+     if (it == info_VkDevice.end()) return;
+ 
++    auto exportFences = mSemaphoreExportFences.find(device);
++    if (exportFences != mSemaphoreExportFences.end()) {
++        VkEncoder* enc = (VkEncoder*)context;
++        for (auto& entry : exportFences->second) {
++            mSyncHelper->close(entry.syncFd);
++            // vkDestroyDevice already holds the encoder's lock, if it takes one.
++            enc->vkDestroyFence(device, entry.fence, nullptr, false /* do lock */);
++        }
++        mSemaphoreExportFences.erase(exportFences);
++    }
++
+     for (auto itr = info_VkDeviceMemory.cbegin(); itr != info_VkDeviceMemory.cend();) {
+         auto& memInfo = itr->second;
+         if (memInfo.device == device) {
+@@ -6594,6 +6604,71 @@ VkResult ResourceTracker::vkQueueSubmitEnc(VkEncoder* enc, VkQueue queue, uint32
+     }
+ }
+ 
++int ResourceTracker::exportQueueSyncFd(VkEncoder* enc, VkQueue queue, VkDevice device) {
++#if defined(VK_USE_PLATFORM_ANDROID_KHR) || DETECT_OS_LINUX
++    MESA_TRACE_SCOPE("exportQueueSyncFd");
++    // Destroy the fences the host has finished waiting on. A fence is never reset
++    // and used again: the reset and the submission reach the host through the
++    // command stream, the export through virtio-gpu, and an export that overtook
++    // them would wait on the fence's earlier, signaled use.
++    std::vector<VkFence> doneFences;
++    {
++        std::lock_guard<std::recursive_mutex> lock(mLock);
++        auto& exportFences = mSemaphoreExportFences[device];
++        for (auto it = exportFences.begin(); it != exportFences.end();) {
++            if (mSyncHelper->wait(it->syncFd, 0) == 0) {
++                mSyncHelper->close(it->syncFd);
++                doneFences.push_back(it->fence);
++                it = exportFences.erase(it);
++            } else {
++                ++it;
++            }
++        }
++    }
++    for (VkFence doneFence : doneFences) {
++        enc->vkDestroyFence(device, doneFence, nullptr, true /* do lock */);
++    }
++
++    // The host has the new fence before the export arrives, as vkCreateFence waits
++    // for its reply, and waits for the submission below if the export comes first.
++    VkExportFenceCreateInfo exportInfo = {
++        .sType = VK_STRUCTURE_TYPE_EXPORT_FENCE_CREATE_INFO,
++        .pNext = nullptr,
++        .handleTypes = VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT,
++    };
++    VkFenceCreateInfo createInfo = {
++        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
++        .pNext = &exportInfo,
++        .flags = 0,
++    };
++    VkFence fence = VK_NULL_HANDLE;
++    if (enc->vkCreateFence(device, &createInfo, nullptr, &fence, true /* do lock */) !=
++        VK_SUCCESS) {
++        return -1;
++    }
++
++    // Signals once everything submitted to the queue before it is done.
++    vkQueueSubmitEnc(enc, queue, 0, static_cast<const VkSubmitInfo*>(nullptr), fence);
++
++    int64_t osHandle = -1;
++    if (createFence(device, gfxstream_vk_fence_to_host_u64(fence), osHandle) != VK_SUCCESS ||
++        osHandle < 0) {
++        enc->vkDestroyFence(device, fence, nullptr, true /* do lock */);
++        return -1;
++    }
++    int fd = (int)osHandle;
++
++    std::lock_guard<std::recursive_mutex> lock(mLock);
++    mSemaphoreExportFences[device].push_back({.fence = fence, .syncFd = mSyncHelper->dup(fd)});
++    return fd;
++#else
++    (void)enc;
++    (void)queue;
++    (void)device;
++    return -1;
++#endif
++}
++
+ static void pruneWaitSemaphores(const std::vector<VkSemaphore>& toRemove, VkSubmitInfo& submitInfo,
+                                 const VkTimelineSemaphoreSubmitInfo* currTssi,
+                                 std::vector<VkSemaphore>& newSemList,
+@@ -6739,6 +6814,20 @@ VkResult ResourceTracker::on_vkQueueSubmitTemplate(void* context, VkResult input
+     std::vector<std::pair<zx_handle_t, zx_koid_t>> post_wait_events;
+     std::vector<int> post_wait_sync_fds;
+ 
++#if GFXSTREAM_ENABLE_GUEST_GOLDFISH
++    // With virtio-gpu native sync and no fence passing, an exportable semaphore's sync
++    // fd is made when the semaphore is created, and the host does not wait for
++    // semaphores: that fd is signaled at once. Instead of waiting for the queue to go
++    // idle after the submission, as for goldfish sync, the semaphores it signals get a
++    // sync fd of a host fence that signals after the submission, which the host waits
++    // for asynchronously.
++    const bool signalWithHostFence =
++        mFeatureInfo.hasVirtioGpuNativeSync &&
++        !(mCaps.params[kParamFencePassing] && mCaps.vulkanCapset.externalSync);
++    std::vector<VkSemaphore> hostFenceSignalSemaphores;
++    VkDevice hostFenceDevice = VK_NULL_HANDLE;
++#endif
++
+     VkEncoder* enc = (VkEncoder*)context;
+ 
+     // The scope of all these "pruned" submitInfos, semLists, etc.. must be at the level that
+@@ -6809,7 +6898,12 @@ VkResult ResourceTracker::on_vkQueueSubmitTemplate(void* context, VkResult input
+ #endif
+ #if GFXSTREAM_ENABLE_GUEST_GOLDFISH
+                     if (semInfo.syncFd.value_or(-1) >= 0) {
+-                        post_wait_sync_fds.push_back(semInfo.syncFd.value());
++                        if (signalWithHostFence) {
++                            hostFenceSignalSemaphores.push_back(semaphore);
++                            if (hostFenceDevice == VK_NULL_HANDLE) hostFenceDevice = semInfo.device;
++                        } else {
++                            post_wait_sync_fds.push_back(semInfo.syncFd.value());
++                        }
+                         signalSemsToRemove.push_back(semaphore);
+                     }
+ #endif
+@@ -6876,6 +6970,26 @@ VkResult ResourceTracker::on_vkQueueSubmitTemplate(void* context, VkResult input
+     input_result = vkQueueSubmitEnc(enc, queue, submitCount, prunedSubmitInfos.data(), fence);
+     if (input_result != VK_SUCCESS) return input_result;
+ 
++#if GFXSTREAM_ENABLE_GUEST_GOLDFISH
++    if (!hostFenceSignalSemaphores.empty()) {
++        int fd = exportQueueSyncFd(enc, queue, hostFenceDevice);
++        std::lock_guard<std::recursive_mutex> lock(mLock);
++        for (VkSemaphore semaphore : hostFenceSignalSemaphores) {
++            auto it = info_VkSemaphore.find(semaphore);
++            if (it == info_VkSemaphore.end()) continue;
++            auto& semInfo = it->second;
++            if (fd >= 0) {
++                if (semInfo.syncFd.value_or(-1) >= 0) mSyncHelper->close(semInfo.syncFd.value());
++                semInfo.syncFd = mSyncHelper->dup(fd);
++            } else if (semInfo.syncFd.value_or(-1) >= 0) {
++                // No host fence: wait for the queue to go idle instead.
++                post_wait_sync_fds.push_back(semInfo.syncFd.value());
++            }
++        }
++        if (fd >= 0) mSyncHelper->close(fd);
++    }
++#endif
++
+     int externalFenceFdToSignal = -1;
+ #if GFXSTREAM_ENABLE_GUEST_GOLDFISH
+     {
+diff --git a/src/gfxstream/guest/vulkan_enc/ResourceTracker.h b/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
+--- a/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
++++ b/src/gfxstream/guest/vulkan_enc/ResourceTracker.h
+@@ -702,6 +702,10 @@ class ResourceTracker {
+     VkResult vkQueueSubmitEnc(VkEncoder* enc, VkQueue queue, uint32_t submitCount,
+                               const VkSubmitInfo2* pSubmits, VkFence fence);
+ 
++    // Queues an empty submission that signals a new exportable host fence once the
++    // queue's earlier work is done, and returns a sync fd for that fence, or -1.
++    int exportQueueSyncFd(VkEncoder* enc, VkQueue queue, VkDevice device);
++
+     VkResult initDescriptorUpdateTemplateBuffers(
+         const VkDescriptorUpdateTemplateCreateInfo* pCreateInfo,
+         VkDescriptorUpdateTemplate descriptorUpdateTemplate);
+@@ -972,6 +976,14 @@ class ResourceTracker {
+ 
+     std::unique_ptr<gfxstream::SyncHelper> mSyncHelper = nullptr;
+ 
++    // Per device, the exportable fences behind semaphores' sync fds, each with a dup
++    // of its sync fd. A fence is destroyed once that fd has signaled.
++    struct SemaphoreExportFence {
++        VkFence fence = VK_NULL_HANDLE;
++        int syncFd = -1;
++    };
++    std::unordered_map<VkDevice, std::vector<SemaphoreExportFence>> mSemaphoreExportFences;
++
+     struct VirtGpuCaps mCaps = {};
+     std::vector<VkExtensionProperties> mHostInstanceExtensions;
+     std::vector<VkExtensionProperties> mHostDeviceExtensions;

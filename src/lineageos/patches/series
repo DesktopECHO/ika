@@ -54,6 +54,7 @@ external/mesa3d patches/external-mesa3d-gfxstream-sleep-while-waiting.patch
 external/mesa3d patches/external-mesa3d-gfxstream-async-acquire-image.patch
 external/mesa3d patches/external-mesa3d-gfxstream-image-format-list.patch
 external/mesa3d patches/external-mesa3d-gfxstream-release-thread-stream.patch
+external/mesa3d patches/external-mesa3d-gfxstream-semaphore-host-fence.patch
 external/mesa3d patches/external-mesa3d-honeykrisp-android.patch
 external/mesa3d patches/external-mesa3d-honeykrisp-vs-nir-leak.patch
 external/mesa3d patches/external-mesa3d-honeykrisp-exec-heap.patch
