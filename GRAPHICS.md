@@ -12,7 +12,7 @@ Android draws with the host's GPU. Its OpenGL ES and Vulkan calls are encoded in
 | `gfxstream` | gfxstream sends OpenGL ES to its own translator on the host's OpenGL driver; Vulkan is optional | Hosts whose only Vulkan driver is a software one, and titles that render wrongly through ANGLE |
 | `guest_swiftshader` | The guest renders on the CPU (ANGLE and SwiftShader) | Ruling out a host GPU problem; turns [low-CPU mode](CONFIGURATION.md#low-cpu-mode) on |
 | `guest_lavapipe` | The guest renders on the CPU with Mesa's lavapipe (Vulkan 1.4) and ANGLE | The same, with Vulkan 1.4 instead of SwiftShader's 1.3; turns low-CPU mode on |
-| `venus` | The default on a GPU with Vulkan 1.3 or newer and ETC2 textures, whose driver can share images with Android, WSL2's Dozen included. Mesa's Venus Vulkan driver in the guest, over virglrenderer on the host's Vulkan driver, with ANGLE for OpenGL ES | Everything, with less of the host's CPU than gfxstream (see [Venus](#venus)) |
+| `venus` | The default on a GPU with Vulkan 1.3 or newer and ETC2 and ASTC textures, whose driver can share images with Android, WSL2's Dozen included. Mesa's Venus Vulkan driver in the guest, over virglrenderer on the host's Vulkan driver, with ANGLE for OpenGL ES | Everything, with less of the host's CPU than gfxstream (see [Venus](#venus)) |
 | `honeykrisp` | The default on Apple Silicon, with the arm64 ROM. Mesa's Apple Vulkan driver runs in the guest itself and drives the host's GPU through the asahi kernel driver's virtio-gpu native context, with ANGLE for OpenGL ES | Everything on Apple Silicon; 3DMark runs a little behind `gfxstream_guest_angle` (see [Honeykrisp in the guest](#honeykrisp-in-the-guest)) |
 
 The two gfxstream modes differ in where OpenGL ES is translated:
@@ -96,12 +96,14 @@ Vulkan devices:
   `gfxstream_guest_angle` there, never `venus`: on an M1 Pro games run faster
   with `gfxstream_guest_angle` (see [Venus](#venus)).
 - `venus` when the first Vulkan device is a GPU with Vulkan 1.3 or newer and
-  ETC2 compressed textures, as Venus's guest sees them. Android expects ETC2
-  of a Vulkan device, and Chromium's GPU process quits without it; gfxstream
-  emulates ETC2 itself, Venus does not. crosvm starts Venus's host side with
-  `vk_require_etc2=true` and `vk_require_astc=true`, which make RADV emulate
-  both, so Ika asks `vulkaninfo` with the same settings. Broadwell's driver
-  has ETC2 of its own; Haswell's cannot offer it at all. The GPU's driver
+  ETC2 and ASTC compressed textures, as Venus's guest sees them. Android
+  expects ETC2 of a Vulkan device, and Chromium's GPU process quits without
+  it; games that ship only ASTC textures, such as Asphalt Legends, draw their
+  scenes black without ASTC. gfxstream emulates both itself, Venus neither.
+  crosvm starts Venus's host side with `vk_require_etc2=true` and
+  `vk_require_astc=true`, which make RADV emulate both, so Ika asks
+  `vulkaninfo` with the same settings. Broadwell's driver has ETC2 of its own
+  but no ASTC; Haswell's cannot offer ETC2 at all. The GPU's driver
   must also have `VK_EXT_external_memory_dma_buf`,
   `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign`,
   through which Venus shares Android's buffers with the host: without them
@@ -124,16 +126,16 @@ flowchart TD
     q3["Apple Silicon?<br/>Asahi Linux"]
     q4["Honeykrisp can run?<br/>asahi kernel driver, arm64 ROM"]
     q5["GPU has Vulkan 1.3 or newer?<br/>From vulkaninfo"]
-    q6["ETC2 textures, even emulated?<br/>Probed as Venus would see it"]
+    q6["ETC2 and ASTC textures, even emulated?<br/>Probed as Venus would see it"]
     q7["Driver shares images with Android?<br/>dma-bufs, format modifiers, foreign queues;<br/>Dozen's opaque fds in WSL2"]
     r1("gfxstream, OpenGL ES only<br/>GPU pipeline is 100% software")
     r2("gfxstream, OpenGL ES only<br/>Haswell (2013) and older")
     hk("honeykrisp<br/>Apple M1 and M2")
     r4("gfxstream_guest_angle<br/>The x86_64 ROM")
     r5("gfxstream_guest_angle<br/>Discrete GPUs on Vulkan 1.2, Iris Plus 650 in WSL")
-    r6("gfxstream_guest_angle<br/>NVIDIA")
+    r6("gfxstream_guest_angle<br/>NVIDIA, Intel Broadwell")
     r7("gfxstream_guest_angle<br/>Radeons older than Vega before Mesa 26.3")
-    venus("venus<br/>AMD, Intel Broadwell and newer,<br/>RTX 4080 and UHD 770 in WSL")
+    venus("venus<br/>AMD, Intel Skylake and newer,<br/>RTX 4080 and UHD 770 in WSL")
 
     start --> q1
     q1 -- yes --> r1
@@ -244,9 +246,11 @@ images ANGLE asks for, and 3DMark stops for want of ASTC textures, which
 gfxstream emulates. Against `gfxstream_guest_angle` on a
 Radeon 780M, a WebGL page with 12,800 draw calls a frame ran at 60 fps instead
 of 24, and crosvm and the render server used about 40% less of the host's CPU,
-for WebGL and video alike; a Broadwell MacBook Air was faster with it too. On
-Intel's Broadwell and Haswell GPUs ANGLE over Venus offers OpenGL ES 3.1, not
-3.2, as their drivers cannot sample ASTC textures; gfxstream emulates them.
+for WebGL and video alike. Intel's Broadwell GPUs have Vulkan 1.3 and ETC2 but
+no ASTC textures, which gfxstream emulates and Venus does not: started with
+`--gpu_mode=venus` there, a Broadwell MacBook Air draws WebGL and video
+faster too, but ANGLE offers OpenGL ES 3.1, not 3.2, and Asphalt Legends
+draws its cars and menus black.
 
 A driver without the extensions Venus shares Android's buffers through cannot
 run it at all: `--gpu_mode=venus` stops there with the extension it lacks, and

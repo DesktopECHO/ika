@@ -818,23 +818,34 @@ vulkan_summary_has_only_software_devices() {
   ' <<<"${summary}"
 }
 
-# Whether the primary Vulkan device (GPU0) offers ETC2 textures as Venus's
-# guest sees it: crosvm starts Venus's render server with vk_require_etc2 and
-# vk_require_astc, which make drivers that can emulate them (RADV) offer them,
-# so vulkaninfo runs with the same settings. Haswell's hasvk cannot. awk reads
-# the whole report: leaving early would end vulkaninfo with SIGPIPE, which
-# pipefail takes for a failure. with_timeout is a shell function, which env
-# cannot run: it goes first, and runs env.
-primary_vulkan_device_has_venus_etc2() {
-  command -v vulkaninfo >/dev/null 2>&1 || return 1
+# The compressed textures the primary Vulkan device (GPU0) lacks as Venus's
+# guest sees it, of ETC2 and ASTC: crosvm starts Venus's render server with
+# vk_require_etc2 and vk_require_astc, which make drivers that can emulate
+# them (RADV, Dozen, Intel's for Arc) offer them, so vulkaninfo runs with the
+# same settings. Haswell's hasvk cannot offer ETC2, and Broadwell's has ETC2
+# but no ASTC. Prints "ETC2", "ASTC", both or nothing; both when vulkaninfo
+# is missing or lists no device. awk reads the whole report: leaving early
+# would end vulkaninfo with SIGPIPE, which pipefail takes for a failure.
+# with_timeout is a shell function, which env cannot run: it goes first, and
+# runs env.
+primary_vulkan_device_missing_venus_textures() {
+  if ! command -v vulkaninfo >/dev/null 2>&1; then
+    printf '%s\n' "ETC2 ASTC"
+    return 0
+  fi
 
   with_timeout 30 env -u DISPLAY -u WAYLAND_DISPLAY vk_require_etc2=true vk_require_astc=true \
     vulkaninfo 2>/dev/null | awk '
       /^GPU0:/ { in_gpu = 1; next }
       /^GPU[0-9]+:/ { in_gpu = 0 }
-      in_gpu && !seen && $1 == "textureCompressionETC2" { seen = 1; found = ($3 == "true") }
-      END { exit !found }
-    '
+      in_gpu && !("etc2" in has) && $1 == "textureCompressionETC2" { has["etc2"] = ($3 == "true") }
+      in_gpu && !("astc" in has) && $1 == "textureCompressionASTC_LDR" { has["astc"] = ($3 == "true") }
+      END {
+        if (!has["etc2"]) missing = "ETC2"
+        if (!has["astc"]) missing = missing (missing ? " " : "") "ASTC"
+        if (missing) print missing
+      }
+    ' || true
 }
 
 # The extensions the primary Vulkan device (GPU0) lacks of those Venus's guest
@@ -842,8 +853,8 @@ primary_vulkan_device_has_venus_etc2() {
 # (VK_ANDROID_native_buffer): dma-buf memory, DRM format modifiers and the
 # foreign queue family. Without one of them Android's Vulkan has no swapchain,
 # and every app stops as it starts to draw. RADV has no format modifiers on
-# Radeons older than Vega before Mesa 26.3. vulkaninfo runs as for the ETC2
-# probe. Prints nothing when the device has them all, when vulkaninfo lists
+# Radeons older than Vega before Mesa 26.3. vulkaninfo runs as for the
+# texture probe. Prints nothing when the device has them all, when vulkaninfo lists
 # no device, or under WSL2, where Venus shares Android's buffers as Dozen's
 # opaque fds instead (see GRAPHICS.md, "Venus on WSL2").
 primary_vulkan_device_missing_venus_extensions() {
@@ -872,16 +883,18 @@ host_is_wsl2() {
 }
 
 # Whether gpu_mode=auto runs Venus here: the primary Vulkan device is a GPU
-# with Vulkan 1.3 or newer and ETC2 textures as Venus's guest sees them, which
-# Android expects of a Vulkan device and Chromium requires (gfxstream emulates
-# ETC2, Venus does not), its driver has the extensions Venus shares Android's
-# buffers through. Under WSL2 the GPU is Dozen's, which emulates ETC2 and ASTC
+# with Vulkan 1.3 or newer and ETC2 and ASTC textures as Venus's guest sees
+# them (Android expects ETC2 of a Vulkan device and Chromium requires it, and
+# games that ship only ASTC textures draw black without them; gfxstream
+# emulates both, Venus neither), its driver has the extensions Venus shares
+# Android's buffers through. Under WSL2 the GPU is Dozen's, which emulates ETC2 and ASTC
 # for Venus and shares Android's buffers as opaque fds (see GRAPHICS.md,
 # "Venus on WSL2"). Apple Silicon is decided before (default_gpu_mode_for_start).
 # Prints why not when it does not suit.
 host_suits_venus() {
   local primary_device
   local missing_extensions
+  local missing_textures
   local version
   local major
   local minor
@@ -906,8 +919,13 @@ host_suits_venus() {
     printf '%s\n' "the GPU's Vulkan is ${version}, below 1.3"
     return 1
   fi
-  if ! primary_vulkan_device_has_venus_etc2; then
+  missing_textures="$(primary_vulkan_device_missing_venus_textures)"
+  if [[ " ${missing_textures} " == *" ETC2 "* ]]; then
     printf '%s\n' "the GPU has no ETC2 textures, even emulated"
+    return 1
+  fi
+  if [[ " ${missing_textures} " == *" ASTC "* ]]; then
+    printf '%s\n' "the GPU has no ASTC textures, even emulated, and games that ship only those would draw black"
     return 1
   fi
   missing_extensions="$(primary_vulkan_device_missing_venus_extensions)"
@@ -982,7 +1000,7 @@ default_gpu_mode_for_start() {
     return 0
   fi
   if venus_blocker="$(host_suits_venus)"; then
-    log "the GPU has Vulkan 1.3 or newer and ETC2 for Venus; defaulting gpu_mode=venus"
+    log "the GPU has Vulkan 1.3 or newer, ETC2 and ASTC for Venus; defaulting gpu_mode=venus"
     printf '%s\n' "venus"
     return 0
   fi

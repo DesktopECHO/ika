@@ -23,12 +23,12 @@ assert_equal() {
     fail "expected '${expected}', got '${actual}'"
 }
 
-# The real ETC2 and extension probes, kept under other names, read a fake
-# vulkaninfo: GPU0 with ETC2 as given by FAKE_ETC2 and the device extensions
-# in FAKE_EXTENSIONS, GPU1 with the opposite ETC2 and every extension Venus
-# needs, then a long tail that would end vulkaninfo with SIGPIPE if the parser
+# The real texture and extension probes, kept under other names, read a fake
+# vulkaninfo: GPU0 with ETC2 and ASTC as given by FAKE_ETC2 and FAKE_ASTC and
+# the device extensions in FAKE_EXTENSIONS, GPU1 with the opposite of both
+# and every extension Venus needs, then a long tail that would end vulkaninfo with SIGPIPE if the parser
 # stopped reading early.
-eval "real_$(declare -f primary_vulkan_device_has_venus_etc2)"
+eval "real_$(declare -f primary_vulkan_device_missing_venus_textures)"
 eval "real_$(declare -f primary_vulkan_device_missing_venus_extensions)"
 mkdir -p "${T}/bin"
 cat >"${T}/bin/vulkaninfo" <<'STUB'
@@ -36,21 +36,25 @@ cat >"${T}/bin/vulkaninfo" <<'STUB'
 [[ "${vk_require_etc2:-}" == "true" && "${vk_require_astc:-}" == "true" ]] || exit 1
 [[ -z "${FAKE_NO_DEVICE:-}" ]] || exit 1
 other=true; [[ "${FAKE_ETC2:-true}" == "true" ]] && other=false
+other_astc=true; [[ "${FAKE_ASTC:-true}" == "true" ]] && other_astc=false
 printf 'Instance Extensions: count = 1\n\tVK_EXT_image_drm_format_modifier : extension revision 2\n'
-printf 'Devices:\n========\nGPU0:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n' "${FAKE_ETC2:-true}"
+printf 'Devices:\n========\nGPU0:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n\ttextureCompressionASTC_LDR              = %s\n' "${FAKE_ETC2:-true}" "${FAKE_ASTC:-true}"
 printf 'Device Extensions: count = 3\n'
 for extension in ${FAKE_EXTENSIONS:-}; do printf '\t%-46s : extension revision 1\n' "${extension}"; done
-printf 'GPU1:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n' "${other}"
+printf 'GPU1:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n\ttextureCompressionASTC_LDR              = %s\n' "${other}" "${other_astc}"
 printf '\tVK_EXT_external_memory_dma_buf : extension revision 1\n\tVK_EXT_image_drm_format_modifier : extension revision 2\n\tVK_EXT_queue_family_foreign : extension revision 1\n'
 for i in $(seq 20000); do printf '\tsome feature %d = true\n' "${i}"; done
 STUB
 chmod +x "${T}/bin/vulkaninfo"
-PATH="${T}/bin:${PATH}" FAKE_ETC2=true real_primary_vulkan_device_has_venus_etc2 || \
-  fail "GPU0's ETC2 under vk_require_etc2 was not found"
-if PATH="${T}/bin:${PATH}" FAKE_ETC2=false real_primary_vulkan_device_has_venus_etc2; then
-  fail "GPU1's ETC2 was taken for GPU0's"
-fi
-echo "ok: the ETC2 probe reads GPU0 as Venus's render server runs"
+# GPU1's textures do not count for GPU0, either way
+assert_equal "" "$(PATH="${T}/bin:${PATH}" real_primary_vulkan_device_missing_venus_textures)"
+assert_equal "ETC2" "$(PATH="${T}/bin:${PATH}" FAKE_ETC2=false real_primary_vulkan_device_missing_venus_textures)"
+# Broadwell: ETC2 of its own, no ASTC
+assert_equal "ASTC" "$(PATH="${T}/bin:${PATH}" FAKE_ASTC=false real_primary_vulkan_device_missing_venus_textures)"
+assert_equal "ETC2 ASTC" "$(PATH="${T}/bin:${PATH}" FAKE_ETC2=false FAKE_ASTC=false real_primary_vulkan_device_missing_venus_textures)"
+# No device listed, or no vulkaninfo: neither is known to be there
+assert_equal "ETC2 ASTC" "$(PATH="${T}/bin:${PATH}" FAKE_NO_DEVICE=1 real_primary_vulkan_device_missing_venus_textures)"
+echo "ok: the texture probe reads GPU0 as Venus's render server runs"
 
 # The extensions Venus's guest shares Android's buffers through: an RX 570's
 # RADV of Mesa 26.2 has no format modifiers, and GPU1's (llvmpipe's there) and
@@ -67,11 +71,15 @@ assert_equal "VK_EXT_external_memory_dma_buf VK_EXT_image_drm_format_modifier VK
 assert_equal "" "$(PATH="${T}/bin:${PATH}" FAKE_NO_DEVICE=1 real_primary_vulkan_device_missing_venus_extensions)"
 echo "ok: the extension probe reads GPU0's device extensions"
 
-# Elsewhere ETC2 as Venus's guest sees it is what the test says
-# (TEST_VENUS_ETC2=1), and so are the extensions the GPU's driver lacks
-# (TEST_VENUS_MISSING), never the machine it runs on.
-primary_vulkan_device_has_venus_etc2() {
-  [[ "${TEST_VENUS_ETC2:-0}" == "1" ]]
+# Elsewhere ETC2 and ASTC as Venus's guest sees them are what the test says
+# (TEST_VENUS_ETC2=1, and TEST_VENUS_ASTC=0 for a GPU without ASTC), and so
+# are the extensions the GPU's driver lacks (TEST_VENUS_MISSING), never the
+# machine it runs on.
+primary_vulkan_device_missing_venus_textures() {
+  local missing=""
+  [[ "${TEST_VENUS_ETC2:-0}" == "1" ]] || missing="ETC2"
+  [[ "${TEST_VENUS_ASTC:-1}" == "1" ]] || missing="${missing:+${missing} }ASTC"
+  printf '%s' "${missing}"
 }
 primary_vulkan_device_missing_venus_extensions() {
   printf '%s' "${TEST_VENUS_MISSING:-}"
@@ -164,9 +172,9 @@ vulkaninfo_summary() {
 assert_equal "gfxstream_guest_angle" "$(default_gpu_mode_for_start)"
 echo "ok: software-only and passed-over Vulkan"
 
-# auto is venus on any GPU with Vulkan 1.3 or newer and ETC2 as Venus sees it
-# (ryzen9's RADV emulates it, mb11's Broadwell and mbp16's M1 have it): the
-# summaries of those hosts, and an NVIDIA GPU's.
+# auto is venus on any GPU with Vulkan 1.3 or newer and ETC2 and ASTC as Venus
+# sees them (ryzen9's RADV emulates them, mbp16's M1 has them): the summaries
+# of those hosts, a Broadwell's and an NVIDIA GPU's.
 broadwell_summary=$'GPU0:\n\tapiVersion         = 1.3.354\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU\n\tdeviceName         = Intel(R) HD Graphics 6000 (BDW GT3)\n\tdriverID           = DRIVER_ID_INTEL_OPEN_SOURCE_MESA\nGPU1:\n\tapiVersion         = 1.4.354\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU\n\tdeviceName         = llvmpipe (LLVM 22.1.8, 256 bits)\n\tdriverID           = DRIVER_ID_MESA_LLVMPIPE'
 honeykrisp_summary=$'GPU0:\n\tapiVersion         = 1.4.354\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU\n\tdeviceName         = Apple M1 Pro (G13S C0)\n\tdriverName         = Honeykrisp'
 nvidia_summary=$'GPU0:\n\tapiVersion         = 1.4.312\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n\tdeviceName         = NVIDIA GeForce RTX 4070\n\tdriverID           = DRIVER_ID_NVIDIA_PROPRIETARY'
@@ -179,6 +187,11 @@ for case_summary in "${radv_summary}" "${broadwell_summary}" "${honeykrisp_summa
   # No ETC2, even emulated: gfxstream_guest_angle, and the reason
   assert_equal "gfxstream_guest_angle" "$(TEST_VENUS_ETC2=0 default_gpu_mode_for_start)"
   assert_equal "the GPU has no ETC2 textures, even emulated" "$(TEST_VENUS_ETC2=0 host_suits_venus || true)"
+  # ETC2 but no ASTC (a Broadwell's own driver), where Asphalt drew its cars
+  # and menus black: gfxstream_guest_angle, and the reason
+  assert_equal "gfxstream_guest_angle" "$(TEST_VENUS_ETC2=1 TEST_VENUS_ASTC=0 default_gpu_mode_for_start)"
+  assert_equal "the GPU has no ASTC textures, even emulated, and games that ship only those would draw black" \
+    "$(TEST_VENUS_ETC2=1 TEST_VENUS_ASTC=0 host_suits_venus || true)"
   # A driver without the extensions Venus shares Android's buffers through
   # (RADV of Mesa 26.2 on an RX 570): gfxstream_guest_angle, and the reason
   assert_equal "gfxstream_guest_angle" \

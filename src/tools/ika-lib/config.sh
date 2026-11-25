@@ -316,8 +316,9 @@ enable_sandbox = false
 [gpu]
 # auto, gfxstream_guest_angle, gfxstream, guest_swiftshader, venus, ...
 # auto is honeykrisp on Apple Silicon with the arm64 ROM; venus on a host
-# whose first Vulkan device is a GPU with Vulkan 1.3 or newer and ETC2
-# textures (RADV's and Dozen's emulated ones count, as under Venus), and whose
+# whose first Vulkan device is a GPU with Vulkan 1.3 or newer and ETC2 and
+# ASTC textures (RADV's and Dozen's emulated ones count, as under Venus; an
+# Intel Broadwell GPU has no ASTC), and whose
 # driver can share images with Android (not RADV before Mesa 26.3 on a Radeon
 # older than Vega; under WSL2 Dozen shares them); gfxstream on a host with
 # only software Vulkan devices, or whose GPU gfxstream passes over for

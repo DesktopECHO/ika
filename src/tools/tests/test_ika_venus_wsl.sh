@@ -22,14 +22,14 @@ assert_equal() {
     fail "expected '${expected}', got '${actual}'"
 }
 
-# A fake vulkaninfo with Dozen's GPU as GPU0: Vulkan 1.3 and ETC2 (which Ika's
-# Dozen emulates under vk_require_etc2), but none of the dma-buf extensions
+# A fake vulkaninfo with Dozen's GPU as GPU0: Vulkan 1.3, ETC2 and ASTC (which
+# Ika's Dozen emulates under vk_require_etc2 and vk_require_astc), but none of the dma-buf extensions
 # Venus shares Android's buffers through on Linux.
 mkdir -p "${T}/bin"
 cat >"${T}/bin/vulkaninfo" <<'STUB'
 #!/usr/bin/env bash
 [[ "${vk_require_etc2:-}" == "true" && "${vk_require_astc:-}" == "true" ]] || exit 1
-printf 'Devices:\n========\nGPU0:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n' "${TEST_DOZEN_ETC2:-true}"
+printf 'Devices:\n========\nGPU0:\nVkPhysicalDeviceFeatures:\n\ttextureCompressionETC2                  = %s\n\ttextureCompressionASTC_LDR              = true\n' "${TEST_DOZEN_ETC2:-true}"
 printf 'Device Extensions: count = 2\n\tVK_KHR_swapchain : extension revision 70\n\tVK_KHR_external_memory_fd : extension revision 1\n'
 STUB
 chmod +x "${T}/bin/vulkaninfo"
